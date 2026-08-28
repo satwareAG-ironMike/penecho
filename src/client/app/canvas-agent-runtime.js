@@ -95,11 +95,14 @@
     CANVAS_AGENT_MARKDOWN_MARKER_LIMIT = 800,
     CANVAS_AGENT_MARKDOWN_BACKSLASH_LIMIT = 256,
     CANVAS_AGENT_MARKDOWN_SEGMENT_LIMIT = 48,
+    CANVAS_AGENT_MARKDOWN_MATH_COUNT_LIMIT = 64,
+    CANVAS_AGENT_MARKDOWN_MATH_SOURCE_LIMIT = 4000,
     CANVAS_AGENT_HEIGHT_MIN = 320,
     CANVAS_AGENT_WIDTH_MIN = 360,
     CANVAS_AGENT_SIZE_STEPS = 40,
     CANVAS_AGENT_RESIZE_KEY_STEP = 20,
     CANVAS_AGENT_INPUT_MAX_LINES = 10,
+    CANVAS_AGENT_FOLLOW_LATEST_PX = 48,
     CANVAS_AGENT_INK_LINE_WIDTH = 12,
     CANVAS_AGENT_INK_PADDING_RATIO = 0.6,
     CANVAS_AGENT_INK_PADDING_MIN = 256,
@@ -200,6 +203,7 @@
     pendingHandshakeId:"",
     pendingProvider:"",
     pendingConnectionChange:null,
+    pendingContextChange:null,
     sessionProjectId:"",
     sessionAccessMode:"controlled",
     sessionProjectCapabilities:null,
@@ -253,6 +257,7 @@
     projectSelectionRevision:0,
     pendingApproval:null,
     followLatest:true,
+    scrollLatestFrame:0,
     panelDrag:null,
     panelResize:null,
     panelPosition:null,
@@ -366,8 +371,12 @@
     canvasAgentUpdateSearchButton();
   }
   function canvasAgentSearchConfigurationDidChange(configured,requiresNewSession=false) {
+    const previousConfigured=canvasAgent.searchConfigured,previousEnabled=canvasAgent.searchEnabled;
     canvasAgentSetSearchConfigured(configured);
-    if (requiresNewSession) canvasAgent.sessionSearchConfigured = false;
+    if (requiresNewSession||previousConfigured!==canvasAgent.searchConfigured||previousEnabled!==canvasAgent.searchEnabled) {
+      canvasAgent.sessionSearchConfigured = false;
+      canvasAgentContextDidChange(true);
+    }
   }
   function canvasAgentSetStatus(text, kind = "") {
     canvasAgentStatus.textContent = text;
@@ -840,8 +849,7 @@
       canvasAgent.projectHistoryLoaded=true;
       canvasAgent.accessMode="controlled";
       localStorage.removeItem(CANVAS_AGENT_PROJECT_KEY);
-      canvasAgentBeginLocalConversation({persistCurrent:false});
-      canvasAgentDropSessionIdentity();
+      canvasAgentContextDidChange(true);
     }
     await canvasAgentLoadProjectHistory(canvasAgent.projectId,canvasAgent.projectSelectionRevision);
     canvasAgentRenderProjects();
@@ -938,7 +946,6 @@
     canvasAgent.projectHistoryLoaded=!next;
     canvasAgent.accessMode="controlled";
     if(next)localStorage.setItem(CANVAS_AGENT_PROJECT_KEY,next);else localStorage.removeItem(CANVAS_AGENT_PROJECT_KEY);
-    canvasAgentBeginLocalConversation({persistCurrent:false,submitExecution});
     canvasAgentRenderProjects();
     canvasAgentSyncPromptSuggestions();
     canvasAgentHideProjectPopover();
@@ -946,8 +953,7 @@
       if(next&&!await canvasAgentLoadProjectHistory(next,revision))return false;
       if(revision!==canvasAgent.projectSelectionRevision||next!==canvasAgent.projectId)return false;
       canvasAgentRenderHistoryList();
-      if(canvasAgent.socket?.readyState===WebSocket.OPEN||canvasAgent.connectPromise)await canvasAgentStartNewConversation(selectedAiConnectionId(),{resetProjection:false,submitExecution});
-      else canvasAgentDropSessionIdentity();
+      if(canvasAgent.socket?.readyState===WebSocket.OPEN||canvasAgent.connectPromise)await canvasAgentChangeContext({submitExecution});
       return true;
     }catch(error){
       if(revision!==canvasAgent.projectSelectionRevision||next!==canvasAgent.projectId)return false;
@@ -1172,6 +1178,11 @@
       remaining-=text.length;
     }
     return retained;
+  }
+  function canvasAgentContinuationHistory() {
+    return canvasAgent.pendingConversationHistory.length
+      ? canvasAgent.pendingConversationHistory.slice()
+      : canvasAgentConversationHistory(canvasAgent.currentConversation);
   }
   function canvasAgentRenderEmpty() {
     const empty=document.createElement("div"), title=document.createElement("strong"), body=document.createElement("span");
@@ -1529,7 +1540,7 @@
   }
   function canvasAgentTranscriptNearLatest() {
     const remaining = canvasAgentTranscript.scrollHeight - canvasAgentTranscript.clientHeight - canvasAgentTranscript.scrollTop;
-    return remaining <= 32;
+    return remaining <= CANVAS_AGENT_FOLLOW_LATEST_PX;
   }
   function canvasAgentSyncFollowLatest() {
     canvasAgent.followLatest = canvasAgentTranscriptNearLatest();
@@ -1539,6 +1550,13 @@
     canvasAgentTranscript.scrollTop = Math.max(0,canvasAgentTranscript.scrollHeight-canvasAgentTranscript.clientHeight);
     canvasAgent.followLatest = true;
     return true;
+  }
+  function canvasAgentScheduleScrollToLatest() {
+    if (!canvasAgent.followLatest || canvasAgent.scrollLatestFrame) return;
+    canvasAgent.scrollLatestFrame=requestAnimationFrame(()=>{
+      canvasAgent.scrollLatestFrame=0;
+      canvasAgentScrollToLatest();
+    });
   }
   function canvasAgentCompactPanel() {
     return Boolean(window.matchMedia && window.matchMedia("(max-width: 700px)").matches);
@@ -2177,13 +2195,69 @@
       return parsed.href;
     }catch{return "";}
   }
+  function canvasAgentDisplayMathSegments(value) {
+    const text=String(value||"").replace(/\r\n?/g,"\n"),segments=[];
+    const escaped=index=>{let slashes=0;for(let at=index-1;at>=0&&text[at]==="\\";at--)slashes++;return slashes%2===1;};
+    const appendText=(start,end)=>{if(end>start)segments.push({type:"text",text:text.slice(start,end)});};
+    let cursor=0,index=0,inCode=false;
+    while(index<text.length-1){
+      if(text[index]==="`"&&!escaped(index)){inCode=!inCode;index++;continue;}
+      if(inCode){index++;continue;}
+      let opening="",closing="";
+      if(text.startsWith("\\[",index)&&!escaped(index)){opening="\\[";closing="\\]";}
+      else if(text.startsWith("$$",index)&&!escaped(index)){opening="$$";closing="$$";}
+      else{index++;continue;}
+      let end=text.indexOf(closing,index+opening.length);
+      while(end>=0&&escaped(end))end=text.indexOf(closing,end+closing.length);
+      if(end<0){index+=opening.length;continue;}
+      appendText(cursor,index);
+      const stop=end+closing.length,raw=text.slice(index,stop),tex=text.slice(index+opening.length,end);
+      if(tex.trim())segments.push({type:"math",tex,raw,display:true});else segments.push({type:"text",text:raw});
+      cursor=stop;index=stop;
+    }
+    appendText(cursor,text.length);
+    return segments;
+  }
+  function canvasAgentSafeMathJaxNode(node) {
+    if(!node||typeof node.querySelector!=="function"||!node.querySelector("svg")||node.querySelector('[data-mml-node="merror"], mjx-merror'))return false;
+    for(const element of [node,...node.querySelectorAll("*")]){
+      if(["script","style","foreignobject","iframe","object","embed"].includes(String(element.localName||element.tagName||"").toLowerCase()))return false;
+      for(const attribute of element.attributes||[]){
+        const name=String(attribute.name||"").toLowerCase(),value=String(attribute.value||"").trim();
+        if(name.startsWith("on")||name==="style"&&/(?:url\s*\(|expression\s*\()/i.test(value)||["href","src","data","action"].includes(name)&&value&&!value.startsWith("#")||name.endsWith(":href")&&value&&!value.startsWith("#"))return false;
+      }
+    }
+    return true;
+  }
+  function canvasAgentMarkdownMathNode(segment) {
+    const tex=String(segment?.tex||""),raw=String(segment?.raw||tex),node=document.createElement("span"),mathJax=globalThis.MathJax;
+    node.className=`canvas-agent-markdown-math ${segment?.display?"is-display":"is-inline"}`;
+    node.textContent=raw;
+    if(!tex.trim()||tex.length>CANVAS_AGENT_MARKDOWN_MATH_SOURCE_LIMIT||typeof mathJax?.tex2svgPromise!=="function"){
+      node.classList.add("is-fallback");return node;
+    }
+    node.classList.add("is-pending");
+    let rendering;
+    try{rendering=mathJax.tex2svgPromise(tex,{display:Boolean(segment?.display)});}
+    catch{node.classList.remove("is-pending");node.classList.add("is-fallback");return node;}
+    void Promise.resolve(rendering).then(rendered=>{
+      if(!canvasAgentSafeMathJaxNode(rendered))throw Error("Unsafe MathJax output");
+      rendered.setAttribute?.("aria-hidden","true");
+      node.replaceChildren(rendered);
+      node.classList.remove("is-pending","is-fallback");
+      node.classList.add("is-rendered");
+      node.setAttribute("role","math");
+      node.setAttribute("aria-label",tex.trim());
+    }).catch(()=>{node.classList.remove("is-pending");node.classList.add("is-fallback");});
+    return node;
+  }
   function canvasAgentAppendMarkdownStyled(parent,value) {
     const segments=MIXED_TEXT?.tokenizeInline?.(String(value||""))||[{type:"text",text:String(value||"")}];
     for(const segment of segments){
-      const content=segment.type==="math"?segment.raw:segment.text;
       let node;
-      if(segment.code){node=document.createElement("code");node.textContent=content;}
-      else node=document.createTextNode(content||"");
+      if(segment.type==="math")node=canvasAgentMarkdownMathNode(segment);
+      else if(segment.code){node=document.createElement("code");node.textContent=segment.text;}
+      else node=document.createTextNode(segment.text||"");
       if(segment.italic){const emphasis=document.createElement("em");emphasis.append(node);node=emphasis;}
       if(segment.bold){const strong=document.createElement("strong");strong.append(node);node=strong;}
       parent.append(node);
@@ -2226,9 +2300,24 @@
       else if("*_`[]<>$^".includes(character))markers++;
       if(lines>CANVAS_AGENT_MARKDOWN_LINE_LIMIT||markers>CANVAS_AGENT_MARKDOWN_MARKER_LIMIT||backslashes>CANVAS_AGENT_MARKDOWN_BACKSLASH_LIMIT)return false;
     }
+    try{
+      let mathCount=0;
+      for(const segment of MIXED_TEXT?.tokenizeInline?.(text)||[]){
+        if(segment.type!=="math")continue;
+        if(++mathCount>CANVAS_AGENT_MARKDOWN_MATH_COUNT_LIMIT||String(segment.tex||"").length>CANVAS_AGENT_MARKDOWN_MATH_SOURCE_LIMIT)return false;
+      }
+    }catch{return false;}
     return true;
   }
   function canvasAgentAppendMarkdown(parent,value) {
+    const displaySegments=canvasAgentDisplayMathSegments(value);
+    if(displaySegments.some(segment=>segment.type==="math")){
+      for(const segment of displaySegments){
+        if(segment.type==="math")parent.append(canvasAgentMarkdownMathNode(segment));
+        else canvasAgentAppendMarkdown(parent,segment.text);
+      }
+      return;
+    }
     const lines=String(value||"").replace(/\r\n?/g,"\n").split("\n");
     let paragraph=null,paragraphHardBreak=false,list=null,quote=null;
     const reset=()=>{paragraph=null;paragraphHardBreak=false;list=null;quote=null;};
@@ -2696,6 +2785,7 @@
         target.historyItem.resultText=canvasAgentHistoryText(resultText,8000);
         canvasAgentRenderToolRow(target);
         canvasAgentScheduleHistoryPersist(0);
+        if (!canvasAgent.viewingHistoryId) canvasAgentScrollToLatest();
       }
     } else if (event.kind === "turn_end") {
       canvasAgent.requestPending = false;
@@ -2706,11 +2796,15 @@
         canvasAgentErrorRow(canvasAgent.lastTurnError,{eventKey:`turn:${event.turn}`});
         canvasAgentSetStatus(canvasAgentErrorSummary(canvasAgent.lastTurnError),"error");
       }
+      if(!canvasAgent.viewingHistoryId)canvasAgentScrollToLatest();
       canvasAgentSyncState();
       canvasAgentPersistCurrentConversation();
       const pendingConnectionChange=canvasAgent.pendingConnectionChange;
       canvasAgent.pendingConnectionChange=null;
       if(pendingConnectionChange)canvasAgentConnectionDidChange(pendingConnectionChange.force,pendingConnectionChange.provider);
+      const pendingContextChange=canvasAgent.pendingContextChange;
+      canvasAgent.pendingContextChange=null;
+      if(pendingContextChange)canvasAgentContextDidChange(pendingContextChange.force);
     }
   }
   async function canvasAgentHandleMessage(message) {
@@ -2748,13 +2842,14 @@
       canvasAgentRenderProjects();
       try { sessionStorage.setItem(CANVAS_AGENT_SESSION_KEY,JSON.stringify({sessionId:canvasAgent.sessionId,resumeToken:canvasAgent.resumeToken,connectionId:canvasAgent.connectionId,engine:canvasAgent.sessionEngine,projectId:canvasAgent.sessionProjectId,accessMode:canvasAgent.sessionAccessMode})); } catch {}
       canvasAgentSetStatus(t(envelope.payload?.resumed ? "canvasAgentResumed" : "canvasAgentReady"),"ready");
-      if (envelope.payload?.resumed) {
+      const replayBacklog=envelope.payload?.resumed&&!canvasAgent.currentConversation?.items?.length;
+      if (replayBacklog) {
         canvasAgent.currentConversation.items=[];
         if (!canvasAgent.viewingHistoryId) canvasAgentTranscript.replaceChildren();
         canvasAgent.assistantRows.clear();
         canvasAgent.toolRows.clear();
       }
-      for (const event of envelope.payload?.backlog || []) canvasAgentHandleEvent(event,{replay:true});
+      if(replayBacklog)for (const event of envelope.payload?.backlog || []) canvasAgentHandleEvent(event,{replay:true});
       if (!canvasAgent.viewingHistoryId&&!canvasAgentTranscript.childElementCount) canvasAgentRenderEmpty();
       canvasAgentPersistCurrentConversation();
       canvasAgentScrollToLatest(true);
@@ -2860,7 +2955,8 @@
     if(selectedAiConnectionId()!==connectionId)return canvasAgentStartNewConversation(selectedAiConnectionId(),{resetProjection:false,submitExecution,preserveDraft,preserveConversation});
     canvasAgentBeginSessionTransition();
     const handshakeId=canvasClientId(),provider=canvasAgentConnectionProvider(connectionId);
-    await canvasAgentWaitForReady(()=>canvasAgentSendEnvelope("new_conversation",{handshakeId,connectionId,webSearchEnabled:canvasAgent.searchEnabled,widgetCapabilities,projectId:canvasAgent.projectId,accessMode:canvasAgentEffectiveAccessMode(),...(canvasAgent.pendingConversationHistory.length?{conversationHistory:canvasAgent.pendingConversationHistory}:{})}),{handshakeId,provider});
+    const conversationHistory=canvasAgentContinuationHistory();
+    await canvasAgentWaitForReady(()=>canvasAgentSendEnvelope("new_conversation",{handshakeId,connectionId,conversationId:canvasAgent.currentConversation?.id||"",webSearchEnabled:canvasAgent.searchEnabled,widgetCapabilities,projectId:canvasAgent.projectId,accessMode:canvasAgentEffectiveAccessMode(),...(conversationHistory.length?{conversationHistory}:{})}),{handshakeId,provider});
     if(selectedAiConnectionId()!==connectionId)return canvasAgentStartNewConversation(selectedAiConnectionId(),{resetProjection:false,submitExecution,preserveDraft,preserveConversation});
   }
   async function canvasAgentChangeConnection(connectionId = selectedAiConnectionId(), {submitExecution=null}={}) {
@@ -2878,8 +2974,33 @@
     canvasAgentSetStatus(t("canvasAgentConnecting"),"connecting");
     canvasAgentBeginSessionTransition();
     const handshakeId=canvasClientId(),provider=canvasAgentConnectionProvider(connectionId);
-    await canvasAgentWaitForReady(()=>canvasAgentSendEnvelope("change_connection",{handshakeId,connectionId,webSearchEnabled:canvasAgent.searchEnabled,widgetCapabilities,projectId:canvasAgent.projectId,accessMode:canvasAgentEffectiveAccessMode()}),{handshakeId,provider});
+    await canvasAgentWaitForReady(()=>canvasAgentSendEnvelope("change_connection",{handshakeId,connectionId,conversationId:canvasAgent.currentConversation?.id||"",webSearchEnabled:canvasAgent.searchEnabled,widgetCapabilities,projectId:canvasAgent.projectId,accessMode:canvasAgentEffectiveAccessMode()}),{handshakeId,provider});
     if(selectedAiConnectionId()!==connectionId)return canvasAgentChangeConnection(selectedAiConnectionId(),{submitExecution});
+  }
+  function canvasAgentSessionContextMatches() {
+    return canvasAgent.sessionSearchEnabled===canvasAgent.searchEnabled
+      && canvasAgent.sessionProjectId===canvasAgent.projectId
+      && canvasAgent.sessionAccessMode===canvasAgentEffectiveAccessMode();
+  }
+  async function canvasAgentChangeContext({submitExecution=null,force=false}={}) {
+    if((canvasAgent.running||canvasAgent.requestPending)&&!submitExecution){canvasAgent.pendingContextChange={force:Boolean(force)};return;}
+    if(canvasAgent.connectPromise)await canvasAgent.connectPromise;
+    if(canvasAgent.socket?.readyState!==WebSocket.OPEN||!canvasAgent.sessionId||!canvasAgent.sessionReady)return canvasAgentConnect({submitExecution});
+    if(!force&&canvasAgentSessionContextMatches())return;
+    if(submitExecution)canvasAgentAssertSubmitExecution(submitExecution);
+    else canvasAgentInvalidateSubmitExecution();
+    const connectionId=selectedAiConnectionId(),widgetCapabilities=await canvasAgentCurrentWidgetCapabilities();
+    if(submitExecution)canvasAgentAssertSubmitExecution(submitExecution);
+    if(selectedAiConnectionId()!==connectionId)return canvasAgentChangeContext({submitExecution,force});
+    canvasAgentSetStatus(t("canvasAgentConnecting"),"connecting");
+    canvasAgentBeginSessionTransition();
+    const handshakeId=canvasClientId(),provider=canvasAgentConnectionProvider(connectionId);
+    await canvasAgentWaitForReady(()=>canvasAgentSendEnvelope("change_context",{
+      handshakeId,connectionId,conversationId:canvasAgent.currentConversation?.id||"",webSearchEnabled:canvasAgent.searchEnabled,
+      widgetCapabilities,projectId:canvasAgent.projectId,accessMode:canvasAgentEffectiveAccessMode(),
+    }),{handshakeId,provider});
+    if(selectedAiConnectionId()!==connectionId||!canvasAgentSessionContextMatches())return canvasAgentChangeContext({submitExecution});
+    canvasAgent.pendingContextChange=null;
   }
   async function canvasAgentConnect(options) {
     const {submitExecution=null}=options||{};
@@ -2887,12 +3008,12 @@
     if(submitExecution)canvasAgentAssertSubmitExecution(submitExecution);
     const connectionId = selectedAiConnectionId();
     if (canvasAgent.socket?.readyState === WebSocket.OPEN && canvasAgent.sessionId) {
-      if (canvasAgent.sessionReady&&canvasAgent.connectionId === connectionId&&canvasAgent.sessionProjectId===canvasAgent.projectId&&canvasAgent.sessionAccessMode===canvasAgentEffectiveAccessMode()) return;
-      if(canvasAgent.sessionReady&&canvasAgent.sessionProjectId===canvasAgent.projectId&&canvasAgent.sessionAccessMode===canvasAgentEffectiveAccessMode()){
+      if (canvasAgent.sessionReady&&canvasAgent.connectionId === connectionId&&canvasAgentSessionContextMatches()) return;
+      if(canvasAgent.sessionReady&&canvasAgent.connectionId!==connectionId){
         await canvasAgentChangeConnection(connectionId,{submitExecution});
-        return;
+        return canvasAgentConnect({submitExecution});
       }
-      await canvasAgentStartNewConversation(connectionId,{submitExecution});
+      await canvasAgentChangeContext({submitExecution});
       return canvasAgentConnect({submitExecution});
     }
     if (canvasAgent.connectPromise) {
@@ -2914,17 +3035,19 @@
         if(socket!==canvasAgent.socket){socket.close();return;}
         canvasAgent.outgoingSeq = 0;
         canvasAgent.incomingSeq = 0;
+        const conversationHistory=canvasAgentContinuationHistory();
         canvasAgentSendEnvelope("hello",{
           handshakeId,
           canvasSessionId:canvasAgent.sessionId,
           resumeToken:canvasAgent.resumeToken,
           clientId:canvasAgent.clientId,
           connectionId,
+          conversationId:canvasAgent.currentConversation?.id||"",
           webSearchEnabled:canvasAgent.searchEnabled,
           widgetCapabilities,
           projectId:canvasAgent.projectId,
           accessMode:canvasAgentEffectiveAccessMode(),
-          ...(canvasAgent.pendingConversationHistory.length?{conversationHistory:canvasAgent.pendingConversationHistory}:{}),
+          ...(conversationHistory.length?{conversationHistory}:{}),
         });
       });
       socket.addEventListener("message",event=>void canvasAgentHandleMessage(event));
@@ -2972,9 +3095,18 @@
     const action = canvasAgentChangeConnection(selectedAiConnectionId());
     void action.catch(error=>canvasAgentSetStatus(String(error?.message||error),"error"));
   }
+  function canvasAgentContextDidChange(force = false) {
+    const connectionActive=canvasAgent.socket?.readyState===WebSocket.OPEN||Boolean(canvasAgent.connectPromise);
+    if(!connectionActive)return;
+    if(canvasAgent.running||canvasAgent.requestPending){
+      canvasAgent.pendingContextChange={force:Boolean(force)||Boolean(canvasAgent.pendingContextChange?.force)};
+      return;
+    }
+    void canvasAgentChangeContext({force}).catch(error=>canvasAgentSetStatus(String(error?.message||error),"error"));
+  }
   async function canvasAgentEnsureSearchSession(submitExecution=null) {
     if (canvasAgent.sessionSearchEnabled === canvasAgent.searchEnabled || canvasAgent.socket?.readyState !== WebSocket.OPEN || !canvasAgent.sessionReady || !canvasAgent.sessionId) return;
-    await canvasAgentStartNewConversation(selectedAiConnectionId(),{submitExecution,preserveDraft:true});
+    await canvasAgentChangeContext({submitExecution});
   }
 
   function canvasAgentValidatedRegion(value) {
@@ -3955,9 +4087,6 @@
   canvasAgentPanel.addEventListener("focusin",canvasAgentPauseAutomaticAI);
   canvasAgentPanel.addEventListener("focusout",()=>queueMicrotask(canvasAgentResumeAutomaticAI));
   canvasAgentTranscript.addEventListener("scroll",canvasAgentSyncFollowLatest,{passive:true});
-  canvasAgentTranscript.addEventListener("wheel",event=>{
-    if (event.deltaY < 0) canvasAgent.followLatest = false;
-  },{passive:true});
   document.addEventListener("paste",event=>{
     if (canvasAgentPanel.hidden||canvasAgentProjectDialogOpen()) return;
     const target = event.target, outsideEditable = target instanceof Element && !canvasAgentPanel.contains(target) && (target.isContentEditable || Boolean(target.closest("input, textarea, select")));
@@ -3971,7 +4100,10 @@
     if(files.length)void canvasAgentHandleFiles(files);
     else void canvasAgentDesktopClipboardFiles().then(desktopFiles=>desktopFiles.length?canvasAgentHandleFiles(desktopFiles):canvasAgentSetStatus(t("canvasAgentFileReadFailed"),"error")).catch(error=>canvasAgentSetStatus(String(error?.message||error),"error"));
   },true);
-  if (typeof ResizeObserver==="function") new ResizeObserver(()=>{canvasAgentSchedulePanelSizeSave();canvasAgentResizeInput();}).observe(canvasAgentPanel);
+  if (typeof ResizeObserver==="function") {
+    new ResizeObserver(()=>{canvasAgentSchedulePanelSizeSave();canvasAgentResizeInput();}).observe(canvasAgentPanel);
+    new ResizeObserver(canvasAgentScheduleScrollToLatest).observe(canvasAgentTranscript);
+  }
   canvasAgentResizeInput();
   window.addEventListener("resize",()=>requestAnimationFrame(()=>{canvasAgentRestorePanelSize();canvasAgentRestorePanelPosition();}),{passive:true});
   window.addEventListener("beforeunload",canvasAgentPersistCurrentConversation);

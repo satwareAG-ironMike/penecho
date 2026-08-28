@@ -131,13 +131,17 @@ In the app, signing in adds:
 - **Linked device.** Pair this host with a one-time key from Cloud → Devices, and your signed-in browsers and apps can reach it from anywhere through Cloud relay. Remote access to your canvas host without exposing it to the internet; API credentials still live only on that device. Pause, resume, or remove the link at any time.
 - **Echoes: co-creation and knowledge sharing.** Browse public Canvases and Widgets across twelve categories, favorite them into a personal library that syncs through Cloud, and add community Widgets straight into your own Canvas. Publish a Canvas of your own with a share category so others can learn from it, build on it, and Echo it — with Craft lineage preserved between versions.
 
-## 🔔 What's new in 1.1.4
+## 🔔 What's new in 1.1.5
 
 - **PenEcho Agent.** Start below the canvas and keep one multi-step workflow moving across local files, read-only folder projects, web research, canvas context, visual creation, and direct canvas edits.
 - **Visual Explorer.** Convert research, documents, notes, and plans into a responsive visual artifact organized from overview to detail and evidence—not a pile of generic cards or a transcript trapped in chat.
 - **A shorter path to useful output.** Research, analyze, structure, visualize, review, and revise in the same workspace. The result stays editable on the canvas, reducing context switching, copy-paste, manual diagramming, and rework.
 - **Progressive visual delivery.** PenEcho Agent can place and review complete Visual Explorer revisions as it works, so useful visual results arrive sooner and can be refined in place instead of regenerated from scratch.
-- **Broader working context.** Add PDF, Word, PowerPoint, Excel, images, code, or a read-only folder project; reference existing Widgets and handwriting; and use Internet Search when available.
+- **Broader working context.** Add PDF, Word, PowerPoint, Excel, images, code, or a read-only folder project; reference existing Widgets and handwriting; use Internet Search when available; and continue through large text and document attachments with explicit reading offsets.
+- **Continuous Agent conversations.** Change the selected project, Internet Search context, model connection, or canvas capabilities without losing the current conversation or pasted draft files. If a request reaches its inactivity timeout or round limit, the next message continues in the same conversation with completed results preserved.
+- **Long-running requests with clear limits.** Model timeout is now a progress-aware inactivity deadline rather than a fixed total-time cap. Configure a per-request PenEcho Agent limit from 50 to 500 rounds; the default is 100.
+- **Readable mathematics in Agent replies.** Inline and display TeX now render as accessible math in final summaries, with the original notation preserved as a safe fallback when rendering is unavailable.
+- **Remembered eraser choice.** PenEcho keeps the selected eraser or area-eraser mode across canvases and reloads.
 
 1.0.0 introduced [PenEcho Cloud](https://penecho.ai), private versioned projects, linked-device remote access, Echoes, public Crafts, and synced favorites. 0.9.0 added multiple AI connections with one-click switching, project-based shared canvases, guided in-place Refine, unified-diff incremental edits, SSE streaming, and request progress with cancellation. See [Releases](https://github.com/penecho/penecho/releases) for the full history.
 
@@ -166,18 +170,22 @@ These recommendations balance answer quality against the latency of PenEcho's re
 | `gpt-5.6-luna` | `xhigh` | Very good canvas results with strong response speed | A responsive quality-first option when `xhigh` reasoning is appropriate |
 | `gpt-5.6-sol` | `high` | Good enough for most requests and more responsive than `xhigh` | Recommended Sol default when responsiveness matters |
 | `gpt-5.6-sol` | `xhigh` | Very good results, but slower and more variable | Quality-first Sol configuration for difficult canvas tasks |
+| `deepseek-v4-flash-vision-exp` | `medium` | Good | Vision-capable canvas work through the DeepSeek API (`https://api.deepseek.com`) |
+| `glm-5.3-flash` | `medium` | Good | Fast canvas work through the GLM Anthropic-compatible API (`https://open.bigmodel.cn/api/anthropic`) |
 
 Typical output usage per request, including hidden reasoning tokens, is roughly `1,000` tokens at `low`, `3,000` at `medium`, and `5,000–8,000` at `xhigh`/`max`. At a typical low-effort volume (`10,000` input / `1,000` output tokens), current standard GPT-5.6 API rates work out to about $0.003–$0.08 per request across Luna, Terra, and Sol; higher effort levels cost more because reasoning tokens are billed as output. Check current [OpenAI API pricing](https://developers.openai.com/api/docs/pricing) before budgeting. CLI modes use the plan you are already signed in with rather than API billing. Google models are untested — if you try Gemini, please share the configuration and results in an issue.
 
 ## ⚙️ Configuration
 
-`penecho configure` opens an interactive center covering everything: LLM source, model, effort, timeout, response-token limit, image format, request recording, and the listening interface and port. The settings people touch most, also writable in `~/.penecho/config.env`:
+`penecho configure` opens an interactive center covering everything: LLM source, model, effort, no-activity timeout, per-request Agent round limit, response-token limit, image format, request recording, and the listening interface and port. The settings people touch most, also writable in `~/.penecho/config.env`:
 
 | Setting | Purpose |
 | --- | --- |
 | `AI_PROVIDER` | Executor: `api`, `kimi-cli`, `codex-cli`, or `claude-cli` |
 | `AI_API_URL` / `AI_API_KEY` / `AI_API_MODEL` | API endpoint, credential, and model (API mode only) |
 | `AI_EFFORT` | Saved reasoning level; the canvas toolbar `Reasoning` menu can override it per request without rewriting the connection |
+| `AI_TIMEOUT_SECONDS` | PenEcho Agent inactivity deadline; genuine model or tool progress restarts the timer |
+| `PENECHO_CANVAS_AGENT_TURN_LIMIT` | Agent rounds allowed per request, from 50 to 500; default 100, with results and conversation preserved at the limit |
 | `HOST` / `PORT` | Listening interface and port, default `0.0.0.0:3888` |
 | `AUTO_AI_DELAY_SECONDS` | Delay before automatic recognition, adjustable from 0 to 10 seconds on the canvas |
 
@@ -190,22 +198,13 @@ Use a different config file for one launch with `--config ./team.env`, or overri
 - For public exposure, place PenEcho behind HTTPS, stronger authentication, rate limiting, and request-size controls.
 - Credentials stay in the Node.js process and the config file and are never sent to browser code. Do not publish config files, logs, screenshots, or request traces containing private content.
 
-## 🗺️ Roadmap
-
-- [x] Multiple AI connections with one-click switching (0.9.0)
-- [x] Project-based shared canvases and versioned bundles (0.9.0)
-- [ ] Better handwriting recognition
-- [ ] Broader model coverage — Google/Gemini is untested; test reports are especially welcome
-- [ ] More natural pen interaction and on-canvas visual tools
-- [ ] More UI translations — English and Chinese today, more welcome
-
 ## ❓ FAQ
 
 **Do I need an API key?**
 No. An authenticated [Kimi Code CLI](https://github.com/MoonshotAI/kimi-code), [Codex CLI](https://developers.openai.com/codex/cli), or [Claude Code CLI](https://code.claude.com/docs/en/overview) works too — PenEcho uses the selected CLI locally and never needs an API key for that source.
 
 **Which model should I start with?**
-[Kimi K3](https://platform.kimi.ai?aff=penecho), Claude Opus 4.8 / 5.0, and the `gpt-5.6` family are all good first choices — see [recommended models](#recommended-model-configurations).
+[Kimi K3](https://platform.kimi.ai?aff=penecho), Claude Opus 4.8 / 5.0, the `gpt-5.6` family, `deepseek-v4-flash-vision-exp`, and `glm-5.3-flash` are tested starting points — see [recommended models](#recommended-model-configurations).
 
 **Is PenEcho free?**
 The app is free and open source under AGPL v3. Model usage is billed by your provider or included in the Codex/Claude plan you sign in with. A typical low-effort request costs a few cents.

@@ -160,6 +160,7 @@ async function createNativeHarness(overrides = {}) {
     resolveWidgetCapabilities:overrides.resolveWidgetCapabilities || (() => ({ professionalEnabled:false, privatePlugins:[] })),
     resolveProject:async () => null,
     modelTimeoutMs:() => overrides.timeoutMs || 5000,
+    canvasAgentTurnLimit:() => overrides.canvasAgentTurnLimit || 100,
     logger:event => logs.push(event),
     ...(overrides.conversationTrace ? { conversationTrace:overrides.conversationTrace } : {}),
     createAppServer:options => {
@@ -760,15 +761,22 @@ test("Codex Native rejects every call in a multi-tool model step before browser 
 });
 
 test("Codex Native interrupts the upstream turn after a terminal shared Canvas tool fuse",async t=>{
-  const harness=await createNativeHarness();
+  const harness=await createNativeHarness({canvasAgentTurnLimit:50});
   t.after(()=>harness.cleanup());
-  const {CANVAS_AGENT_MAX_TOOL_CALLS_PER_USER_TURN}=await import("../src/server/canvas-agent/runtime.mjs"),session=await harness.connect(),process=harness.processes[0];
+  const session=await harness.connect(),process=harness.processes[0];
+  let requestNumber=0;
   process.requestHandler=async method=>{
     if(method!=="turn/start")return{};
-    const turnId="terminal-tool-fuse-turn";
+    requestNumber+=1;
+    const turnId=requestNumber===1?"terminal-tool-fuse-turn":"terminal-tool-fuse-continued-turn";
     setImmediate(async()=>{
       process.emitNotification("turn/started",{threadId:process.threadId,turn:{id:turnId}});
-      session.canvasTurnBudget.toolCalls=CANVAS_AGENT_MAX_TOOL_CALLS_PER_USER_TURN;
+      if(requestNumber===2){
+        process.emitNotification("item/agentMessage/delta",{threadId:process.threadId,turnId,delta:"Continued after round limit."});
+        process.emitNotification("turn/completed",{threadId:process.threadId,turn:{id:turnId,status:"completed",items:[]}});
+        return;
+      }
+      session.canvasTurnBudget.toolCalls=50;
       const call={callId:"terminal-tool-call",namespace:"penecho",tool:"canvas_inspect",arguments:{scope:"canvas"}};
       emitRawToolDecision(process,turnId,[call],"terminal-tool-response");
       await process.serverRequest("item/tool/call",{threadId:process.threadId,turnId,...call});
@@ -782,11 +790,14 @@ test("Codex Native interrupts the upstream turn after a terminal shared Canvas t
   assert.equal(process.responses.length,1);
   assert.equal(process.responses[0].result.success,true);
   assert.match(process.responses[0].result.contentItems[0].text,/CANVAS_AGENT_TOOL_LIMIT_STOPPED/);
-  assert.equal(harness.messages.some(message=>message.type==="session_event"&&message.payload.kind==="assistant_message"&&message.payload.text.includes("Canvas tool calls")),true);
+  assert.equal(harness.messages.some(message=>message.type==="session_event"&&message.payload.kind==="assistant_message"&&message.payload.text.includes("50-round limit")),true);
   const turnEnd=harness.messages.findLast(message=>message.type==="session_event"&&message.payload.kind==="turn_end");
   assert.equal(turnEnd?.payload.reason?.kind,"blocked");
   assert.equal(session.active,null);
   assert.equal(harness.host.sessions.has(session.id),true,"a clean terminal tool stop must preserve the reusable native thread");
+  const continued=await harness.host.submit(session,"Continue after the round limit.",false,[],{},null);
+  assert.equal(continued.output,"Continued after round limit.");
+  assert.equal(harness.host.sessions.has(session.id),true);
 });
 
  test("Codex Native treats raw item.id and call_id as aliases without allowing double execution",async t=>{
@@ -1094,23 +1105,40 @@ test("Codex Native process crashes fail closed and remove the session mapping an
   await assert.rejects(harness.host.submit(session, "submit after crash", false, [], {}, null), /closed/);
 });
 
-test("Codex Native turn timeout interrupts, fails tools, closes the process, and is idempotent", async t => {
+test("Codex Native turn timeout interrupts only the request and the same session continues", async t => {
   const harness = await createNativeHarness({ timeoutMs:30 });
   t.after(() => harness.cleanup());
   const session = await harness.connect();
   const process = harness.processes[0];
-  process.requestHandler = async method => method === "turn/start" ? { turn:{ id:"timeout-turn" } } : {};
+  let pendingToolRejected=false;
+  session.pending.set("late-timeout-tool",{reject:()=>{pendingToolRejected=true;}});
+  let requestNumber=0;
+  process.requestHandler = async method => {
+    if(method!=="turn/start")return{};
+    requestNumber+=1;
+    const turnId=requestNumber===1?"timeout-turn":"continued-turn";
+    if(requestNumber===2)setImmediate(()=>{
+      process.emitNotification("turn/started",{threadId:process.threadId,turn:{id:turnId}});
+      process.emitNotification("item/agentMessage/delta",{threadId:process.threadId,turnId,delta:"Continued after timeout."});
+      process.emitNotification("turn/completed",{threadId:process.threadId,turn:{id:turnId,status:"completed",items:[]}});
+    });
+    return {turn:{id:turnId}};
+  };
   await assert.rejects(harness.host.submit(session, "timeout turn", false, [], {}, null), /timed out/);
-  await waitFor(() => process.closedCount > 0);
+  await waitFor(() => process.requests.some(request => request.method === "turn/interrupt" && request.params.turnId === "timeout-turn"));
   assert.ok(process.requests.some(request => request.method === "turn/interrupt" && request.params.turnId === "timeout-turn"));
-  assert.equal(harness.host.sessions.size, 0);
-  await harness.host.disposeSession(session);
-  await harness.host.dispose();
-  assert.equal(process.closedCount, 1);
+  assert.equal(process.closedCount,0);
+  assert.equal(harness.host.sessions.has(session.id),true);
+  assert.equal(pendingToolRejected,true);
+  assert.equal(harness.host.resolveToolResult(session,{requestId:"late-timeout-tool",ok:true,result:{revision:1}}),false);
+  assert.throws(()=>harness.host.resolveToolResult(session,{requestId:"unknown-tool",ok:true,result:{}}),/does not match/);
+  const continued=await harness.host.submit(session,"continue after timeout",false,[],{},null);
+  assert.equal(continued.output,"Continued after timeout.");
+  assert.equal(harness.host.sessions.has(session.id),true);
 });
 
 test("Codex CLI direct bridge refreshes its idle timeout while the turn keeps making progress", async t => {
-  const harness = await createNativeHarness({ timeoutMs:1000 });
+  const harness = await createNativeHarness({ timeoutMs:120 });
   t.after(() => harness.cleanup());
   const session = await harness.connect();
   const process = harness.processes[0];
@@ -1122,20 +1150,33 @@ test("Codex CLI direct bridge refreshes its idle timeout while the turn keeps ma
       threadId:process.threadId,
       turnId,
       tokenUsage:{ inputTokens:100, outputTokens:1 },
-    }), 600);
+    }), 80);
     setTimeout(() => process.emitNotification("item/agentMessage/delta", {
       threadId:process.threadId,
       turnId,
       delta:"Still working. ",
-    }), 1200);
+    }), 160);
+    setTimeout(() => process.emitNotification("thread/tokenUsage/updated", {
+      threadId:process.threadId,
+      turnId,
+      tokenUsage:{ inputTokens:100, outputTokens:2 },
+    }), 240);
+    setTimeout(() => process.emitNotification("item/reasoning/summaryTextDelta", {
+      threadId:process.threadId, turnId, itemId:"reasoning-item", summaryIndex:0, delta:"Progress.",
+    }), 320);
+    setTimeout(() => process.emitNotification("item/agentMessage/delta", {
+      threadId:process.threadId,
+      turnId,
+      delta:"Done.",
+    }), 400);
     setTimeout(() => process.emitNotification("turn/completed", {
       threadId:process.threadId,
       turn:{ id:turnId, status:"completed", items:[] },
-    }), 1700);
+    }), 430);
     return { turn:{ id:turnId } };
   };
   const result = await harness.host.submit(session, "long active turn", false, [], {}, null);
-  assert.equal(result.output, "Still working.");
+  assert.equal(result.output, "Still working. Done.");
   assert.equal(process.closedCount, 0);
   assert.equal(harness.host.sessions.has(session.id), true);
 });
@@ -1931,22 +1972,49 @@ test("PenEcho Agent router fixes the session owner and switches providers atomic
   assert.equal(claude.engine, "harness");
   assert.deepEqual(events, [
     "native:connect:codex-a",
-    "native:dispose:native-1",
     "harness:connect:api-b",
-    "harness:dispose:harness-1",
+    "native:dispose:native-1",
     "native:connect:codex-b",
-    "native:dispose:native-2",
+    "harness:dispose:harness-1",
     "native:connect:codex-c",
-    "native:dispose:native-3",
+    "native:dispose:native-2",
     "harness:connect:kimi-d",
-    "harness:dispose:harness-2",
+    "native:dispose:native-3",
     "harness:connect:claude-e",
+    "harness:dispose:harness-2",
   ]);
   assert.equal(harnessCount,1);
   assert.equal(nativeCount,1);
   assert.deepEqual(readyEngines,["codex-native"]);
   codexAgain.engineOwner = {imposter:true};
   assert.throws(() => router.submit(codexAgain), /owner is invalid/);
+});
+
+test("PenEcho Agent router changes execution context atomically without changing logical conversation", async t => {
+  const {CanvasAgentHostRouter}=await import("../src/server/canvas-agent/host-router.mjs");
+  const events=[],requests=[];
+  let connectCount=0,failReplacement=true;
+  const owner={
+    async connect(request){
+      connectCount+=1;requests.push(request);events.push(`connect:${connectCount}`);
+      if(connectCount>1&&failReplacement)throw new Error("replacement failed");
+      return{id:`session-${connectCount}`,connectionId:request.connectionId,logicalConversationId:request.conversationId,backlog:request.initialBacklog||[]};
+    },
+    async disposeSession(session){events.push(`dispose:${session.id}`)},
+    activeProjectIds:()=>[],async dispose(){},
+  };
+  const router=new CanvasAgentHostRouter({resolveConnection:id=>({id,provider:"api"}),harnessFactory:()=>owner,nativeFactory:()=>{throw new Error("unused")}});
+  t.after(()=>router.dispose());
+  const original=await router.connect({connectionId:"api",conversationId:"logical-conversation"});
+  original.backlog=[{kind:"user_message",turn:1,text:"keep me"},{kind:"assistant_message",turn:1,text:"kept"}];
+  await assert.rejects(router.changeContext(original,{connectionId:"api",conversationId:"logical-conversation",webSearchEnabled:true}),/replacement failed/);
+  assert.deepEqual(events,["connect:1","connect:2"]);
+  failReplacement=false;
+  const replacement=await router.changeContext(original,{connectionId:"api",conversationId:"logical-conversation",webSearchEnabled:true});
+  assert.equal(replacement.logicalConversationId,"logical-conversation");
+  assert.deepEqual(requests.at(-1).initialBacklog,original.backlog);
+  assert.match(requests.at(-1).continuity,/Earlier dialogue to continue/);
+  assert.deepEqual(events,["connect:1","connect:2","connect:3","dispose:session-1"]);
 });
 
 test("PenEcho Agent router turns saved chat into bounded role-preserving continuation", async t => {

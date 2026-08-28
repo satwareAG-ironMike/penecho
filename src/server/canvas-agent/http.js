@@ -8,16 +8,16 @@ const MAX_REMOTE_AGENT_CHANNELS = 8;
 const REMOTE_AGENT_CHANNEL_TTL_MS = 5 * 60_000;
 const REMOTE_AGENT_POLL_MS = 15_000;
 
-function attachCanvasAgent({ server, authorize, resolveConnection, listConnections, resolveWebSearch = () => null, resolveWidgetCapabilities = () => ({ professionalEnabled:false, privatePlugins:[] }), resolveProject = async () => null, stateDirectory, rootDirectory, modelTimeoutMs, logger = () => {}, conversationLogger = null, conversationTrace = null }) {
+function attachCanvasAgent({ server, authorize, resolveConnection, listConnections, resolveWebSearch = () => null, resolveWidgetCapabilities = () => ({ professionalEnabled:false, privatePlugins:[] }), resolveProject = async () => null, stateDirectory, rootDirectory, modelTimeoutMs, canvasAgentTurnLimit, logger = () => {}, conversationLogger = null, conversationTrace = null }) {
   const wss = new WebSocketServer({ noServer:true, maxPayload:MAX_AGENT_FRAME_BYTES, perMessageDeflate:false });
   let hostPromise = null;
   const harnessFactory = async () => {
     const runtime = await import("./runtime.mjs");
-    return new runtime.CanvasHarnessHost({ stateDirectory, rootDirectory, resolveConnection, listConnections, resolveWebSearch, resolveWidgetCapabilities, resolveProject, modelTimeoutMs, logger, conversationLogger, conversationTrace });
+    return new runtime.CanvasHarnessHost({ stateDirectory, rootDirectory, resolveConnection, listConnections, resolveWebSearch, resolveWidgetCapabilities, resolveProject, modelTimeoutMs, canvasAgentTurnLimit, logger, conversationLogger, conversationTrace });
   };
   const nativeFactory = async () => {
     const codexNativeHost = await import("./codex-native-host.mjs");
-    return new codexNativeHost.CodexNativeHost({ stateDirectory, rootDirectory, resolveConnection, resolveWebSearch, resolveWidgetCapabilities, resolveProject, modelTimeoutMs, logger, conversationLogger, conversationTrace });
+    return new codexNativeHost.CodexNativeHost({ stateDirectory, rootDirectory, resolveConnection, resolveWebSearch, resolveWidgetCapabilities, resolveProject, modelTimeoutMs, canvasAgentTurnLimit, logger, conversationLogger, conversationTrace });
   };
   const host = () => {
     if (!hostPromise) hostPromise = import("./host-router.mjs").then(async hostRouter => {
@@ -85,6 +85,7 @@ function attachCanvasAgent({ server, authorize, resolveConnection, listConnectio
             widgetCapabilities:envelope.payload?.widgetCapabilities,
             projectId:String(envelope.payload?.projectId || ""),
             accessMode:String(envelope.payload?.accessMode || "controlled"),
+            conversationId:String(envelope.payload?.conversationId || ""),
             conversationHistory:envelope.payload?.conversationHistory,
             binding,
             send,
@@ -109,22 +110,67 @@ function attachCanvasAgent({ server, authorize, resolveConnection, listConnectio
           state.session = null;
           state.pendingHandshakeId=handshakeId;
           const send = sendForHandshake(generation,handshakeId);
-          const replacement = await runtime.replaceSession(previous, {
-            clientId:previous.clientId,
-            connectionId,
-            webSearchEnabled:envelope.payload?.webSearchEnabled === true,
-            widgetCapabilities:envelope.payload?.widgetCapabilities,
-            projectId:String(envelope.payload?.projectId || ""),
-            accessMode:String(envelope.payload?.accessMode || "controlled"),
-            conversationHistory:envelope.payload?.conversationHistory,
-            binding,
-            send,
-          });
+          let replacement;
+          try {
+            replacement = await runtime.replaceSession(previous, {
+              clientId:previous.clientId,
+              connectionId,
+              webSearchEnabled:envelope.payload?.webSearchEnabled === true,
+              widgetCapabilities:envelope.payload?.widgetCapabilities,
+              projectId:String(envelope.payload?.projectId || ""),
+              accessMode:String(envelope.payload?.accessMode || "controlled"),
+              conversationId:String(envelope.payload?.conversationId || ""),
+              conversationHistory:envelope.payload?.conversationHistory,
+              binding,
+              send,
+            });
+          } catch (error) {
+            if(generation===state.sessionGeneration){state.sessionGeneration--;state.session=previous;}
+            state.pendingHandshakeId=handshakeId;
+            fail(error,false);
+            if(state.pendingHandshakeId===handshakeId)state.pendingHandshakeId="";
+            return;
+          }
           if (generation !== state.sessionGeneration) {
             await runtime.disposeSession(replacement).catch(() => {});
             throw new Error("PenEcho Agent session replacement is no longer current.");
           }
           state.session = replacement;
+          if(state.pendingHandshakeId===handshakeId)state.pendingHandshakeId="";
+          return;
+        }
+        if (envelope.type === "change_context") {
+          const previous = state.session, connectionId = String(envelope.payload?.connectionId || previous.connectionId),
+            handshakeId=normalizedHandshakeId(envelope.payload?.handshakeId);
+          if (!resolveConnection(connectionId)) throw new Error("The selected AI connection was not found.");
+          const generation = ++state.sessionGeneration;
+          state.pendingHandshakeId=handshakeId;
+          const send = sendForHandshake(generation,handshakeId);
+          let changed;
+          try {
+            changed = await runtime.changeContext(previous, {
+              clientId:previous.clientId,
+              connectionId,
+              webSearchEnabled:envelope.payload?.webSearchEnabled === true,
+              widgetCapabilities:envelope.payload?.widgetCapabilities,
+              projectId:String(envelope.payload?.projectId || ""),
+              accessMode:String(envelope.payload?.accessMode || "controlled"),
+              conversationId:String(envelope.payload?.conversationId || ""),
+              binding,
+              send,
+            });
+          } catch (error) {
+            if(generation===state.sessionGeneration)state.sessionGeneration--;
+            state.pendingHandshakeId=handshakeId;
+            fail(error,false);
+            if(state.pendingHandshakeId===handshakeId)state.pendingHandshakeId="";
+            return;
+          }
+          if (generation !== state.sessionGeneration) {
+            if (changed !== previous) await runtime.disposeSession(changed).catch(() => {});
+            throw new Error("PenEcho Agent context change is no longer current.");
+          }
+          state.session = changed;
           if(state.pendingHandshakeId===handshakeId)state.pendingHandshakeId="";
           return;
         }
@@ -144,6 +190,7 @@ function attachCanvasAgent({ server, authorize, resolveConnection, listConnectio
               widgetCapabilities:envelope.payload?.widgetCapabilities,
               projectId:String(envelope.payload?.projectId || ""),
               accessMode:String(envelope.payload?.accessMode || "controlled"),
+              conversationId:String(envelope.payload?.conversationId || ""),
               binding,
               send,
             });

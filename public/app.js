@@ -285,6 +285,7 @@
     settingsEffortToggle = document.querySelector("#settingsEffortToggle"),
     settingsEffortOptions = document.querySelector("#settingsEffortOptions"),
     settingsMaxTokens = document.querySelector("#settingsMaxTokens"),
+    settingsAgentTurnLimit = document.querySelector("#settingsAgentTurnLimit"),
     settingsTimeout = document.querySelector("#settingsTimeout"),
     settingsAutoDelay = document.querySelector("#settingsAutoDelay"),
     settingsImageFormat = document.querySelector("#settingsImageFormat"),
@@ -572,9 +573,12 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       changelogDialog: "PenEcho release notes",
       changelogClose: "Close release notes",
       changelogBadge: "What's new",
-      changelogTitle: "Visual productivity with PenEcho Agent",
+      changelogTitle: "PenEcho Agent, built for longer work",
       changelogCanvasAgentResearch: "Turn folders, files, web research, and canvas context into structured visual work from the PenEcho Agent below the canvas.",
       changelogCanvasAgentWorkspace: "Visual Explorer brings research, analysis, planning, and editable on-canvas delivery into one workflow—with less tool switching and rework.",
+      changelogAgentContinuity: "Keep the same conversation when projects, search, or model connections change, and continue after an inactivity timeout or request-round limit with completed work preserved.",
+      changelogAgentMath: "Read larger file sections with explicit continuation and see inline or display TeX rendered clearly in Agent summaries.",
+      changelogEraserMemory: "PenEcho remembers whether you last chose the eraser or area eraser across canvases and reloads.",
       settingsTitle: "Settings",
       settingsClose: "Close settings",
       settingsApiSection: "AI connection",
@@ -710,7 +714,11 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       settingsEffort: "Reasoning",
       settingsMaxTokens: "Maximum response tokens",
       settingsMaxTokensHelp: "Includes thinking tokens. Default 20,000; must be larger than 15,000. Low limits may be exhausted during reasoning.",
-      settingsTimeout: "Timeout",
+      settingsAgentTurnLimit: "PenEcho Agent rounds per request",
+      settingsAgentTurnLimitUnit: "rounds",
+      settingsAgentTurnLimitHelp: "Stops only the current request at the limit. Results and conversation stay available so the next message can continue. Default 100.",
+      settingsTimeout: "No-activity timeout",
+      settingsTimeoutHelp: "Resets when model output, tool activity, or progress arrives. There is no fixed total-time limit.",
       settingsAutoDelay: "Auto AI delay",
       settingsImageFormat: "Canvas image",
       settingsTraceLimit: "Keep request traces",
@@ -1363,6 +1371,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     }));
   }
   const initialPlugins = storedPluginSettings();
+  const ERASER_MODE_STORAGE_KEY = "penecho-eraser-mode";
   const storedPrimaryLanguage = localStorage.getItem("penecho-language"),
     storedLegacyLanguage = localStorage.getItem("ghostboard-language"),
     storedTheme = localStorage.getItem("penecho-theme") || localStorage.getItem("ghostboard-theme"),
@@ -1374,6 +1383,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     storedCanvasAgentAutoOpen = localStorage.getItem("penecho-canvas-agent-auto-open"),
     storedWidgetShadowEnabled = localStorage.getItem("penecho-widget-shadow"),
     storedSnapshotLocation = localStorage.getItem("penecho-snapshot-location"),
+    storedEraserMode = localStorage.getItem(ERASER_MODE_STORAGE_KEY),
     storedAiEffortText = String(localStorage.getItem("penecho-ai-effort") || "").trim().toLowerCase(),
     storedAiEffort = storedAiEffortText === "xhigh" ? "max" : storedAiEffortText,
     storedAutoDelay = storedAutoDelayText === null ? NaN : Number(storedAutoDelayText),
@@ -1394,6 +1404,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       ? configuredCanvasAgentAutoOpen
       : storedCanvasAgentAutoOpen === null ? configuredCanvasAgentAutoOpen !== false : storedCanvasAgentAutoOpen === "true",
     initialWidgetShadowEnabled = storedWidgetShadowEnabled === "true",
+    initialEraserMode = ["eraser", "area-eraser"].includes(storedEraserMode) ? storedEraserMode : "eraser",
     // The public viewer shares the Cloud origin (and therefore localStorage)
     // with editable Cloud Canvases. Never inherit their last-selected Cloud
     // history location: the read-only shell has no /api/cloud/library route.
@@ -1437,7 +1448,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
   const tiles = new Map(),
     state = {
       mode: "pen",
-      eraserMode: "eraser",
+      eraserMode: initialEraserMode,
       scale: 0.1,
       panX: 0,
       panY: 0,
@@ -1602,7 +1613,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
   const AI_SUPERSEDED = "AI_SUPERSEDED";
   const FEATURE_TOUR_STORAGE_KEY = "penecho-tour-progress";
   const CHANGELOG_STORAGE_KEY = "penecho-changelog-seen";
-  const CHANGELOG_VERSION = "1.1.4";
+  const CHANGELOG_VERSION = "1.1.5";
   // Keep seen IDs stable. Add a new ID (or bump its -vN suffix) to show only that feature to returning users.
   const FEATURE_TOUR_STEPS = Object.freeze([
     { id: "core-effort-v1", targets: ["#aiEffortButton"], titleKey: "tourEffortTitle", bodyKey: "tourEffortBody", placement: "bottom", radius: 8 },
@@ -2895,6 +2906,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       settingsEffort.value = body.effort || defaultConnectionEffort(body.provider);
       updateSettingsEffortOptions();
       settingsMaxTokens.value = String(body.maxTokens);
+      settingsAgentTurnLimit.value = String(body.canvasAgentTurnLimit);
       settingsTimeout.value = String(body.timeoutSeconds);
       settingsAutoDelay.value = String(body.autoDelaySeconds);
       settingsImageFormat.value = body.imageFormat;
@@ -2921,7 +2933,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
         scope, deepSeekSearchProvider:settingsDeepSeekSearchProvider.value, deepseekSearchApiKey:settingsDeepSeekSearchApiKey.value, tavilyApiKey:settingsTavilyApiKey.value,
       } : {
         scope, provider, apiFormat:apiPreset?.format || settingsApiFormat.value, apiPreset:apiPreset ? `${apiPreset.family}-${apiPreset.region}-${apiPreset.service}` : "", apiUrl:settingsApiUrl.value, apiModel:settingsApiModel.value,
-        apiKey:settingsApiKey.value, effort:settingsEffort.value, maxTokens:Number(settingsMaxTokens.value), timeoutSeconds:Number(settingsTimeout.value),
+        apiKey:settingsApiKey.value, effort:settingsEffort.value, maxTokens:Number(settingsMaxTokens.value), canvasAgentTurnLimit:Number(settingsAgentTurnLimit.value), timeoutSeconds:Number(settingsTimeout.value),
         autoDelaySeconds:Number(settingsAutoDelay.value), imageFormat:settingsImageFormat.value,
         requestTrace:settings.requestTrace, requestTraceLimit:Number(settingsTraceLimit.value),
       };
@@ -3316,7 +3328,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       if (state.pendingWidget && pluginEnabled(state.pendingWidget.pluginId)) mountWidget(state.pendingWidget);
       persistPluginSettings();
       requestRender();
-      if(catalogWasLoaded)canvasAgentConnectionDidChange(true);
+      if(catalogWasLoaded)canvasAgentContextDidChange(true);
       loadSucceeded=true;
       return true;
     } catch (error) {
@@ -3921,7 +3933,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     if (plugin.documentPath) applyWidgetPluginState(pluginId, state.plugins[pluginId]);
     else plugin.onChange?.(state.plugins[pluginId]);
     updatePluginControl();
-    if (pluginId === "flowchart" || plugin.builtIn === false) canvasAgentConnectionDidChange(true);
+    if (pluginId === "flowchart" || plugin.builtIn === false) canvasAgentContextDidChange(true);
     return true;
   }
   function setEffort(value) {
@@ -14862,11 +14874,14 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     CANVAS_AGENT_MARKDOWN_MARKER_LIMIT = 800,
     CANVAS_AGENT_MARKDOWN_BACKSLASH_LIMIT = 256,
     CANVAS_AGENT_MARKDOWN_SEGMENT_LIMIT = 48,
+    CANVAS_AGENT_MARKDOWN_MATH_COUNT_LIMIT = 64,
+    CANVAS_AGENT_MARKDOWN_MATH_SOURCE_LIMIT = 4000,
     CANVAS_AGENT_HEIGHT_MIN = 320,
     CANVAS_AGENT_WIDTH_MIN = 360,
     CANVAS_AGENT_SIZE_STEPS = 40,
     CANVAS_AGENT_RESIZE_KEY_STEP = 20,
     CANVAS_AGENT_INPUT_MAX_LINES = 10,
+    CANVAS_AGENT_FOLLOW_LATEST_PX = 48,
     CANVAS_AGENT_INK_LINE_WIDTH = 12,
     CANVAS_AGENT_INK_PADDING_RATIO = 0.6,
     CANVAS_AGENT_INK_PADDING_MIN = 256,
@@ -14967,6 +14982,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     pendingHandshakeId:"",
     pendingProvider:"",
     pendingConnectionChange:null,
+    pendingContextChange:null,
     sessionProjectId:"",
     sessionAccessMode:"controlled",
     sessionProjectCapabilities:null,
@@ -15020,6 +15036,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     projectSelectionRevision:0,
     pendingApproval:null,
     followLatest:true,
+    scrollLatestFrame:0,
     panelDrag:null,
     panelResize:null,
     panelPosition:null,
@@ -15133,8 +15150,12 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     canvasAgentUpdateSearchButton();
   }
   function canvasAgentSearchConfigurationDidChange(configured,requiresNewSession=false) {
+    const previousConfigured=canvasAgent.searchConfigured,previousEnabled=canvasAgent.searchEnabled;
     canvasAgentSetSearchConfigured(configured);
-    if (requiresNewSession) canvasAgent.sessionSearchConfigured = false;
+    if (requiresNewSession||previousConfigured!==canvasAgent.searchConfigured||previousEnabled!==canvasAgent.searchEnabled) {
+      canvasAgent.sessionSearchConfigured = false;
+      canvasAgentContextDidChange(true);
+    }
   }
   function canvasAgentSetStatus(text, kind = "") {
     canvasAgentStatus.textContent = text;
@@ -15607,8 +15628,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       canvasAgent.projectHistoryLoaded=true;
       canvasAgent.accessMode="controlled";
       localStorage.removeItem(CANVAS_AGENT_PROJECT_KEY);
-      canvasAgentBeginLocalConversation({persistCurrent:false});
-      canvasAgentDropSessionIdentity();
+      canvasAgentContextDidChange(true);
     }
     await canvasAgentLoadProjectHistory(canvasAgent.projectId,canvasAgent.projectSelectionRevision);
     canvasAgentRenderProjects();
@@ -15705,7 +15725,6 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     canvasAgent.projectHistoryLoaded=!next;
     canvasAgent.accessMode="controlled";
     if(next)localStorage.setItem(CANVAS_AGENT_PROJECT_KEY,next);else localStorage.removeItem(CANVAS_AGENT_PROJECT_KEY);
-    canvasAgentBeginLocalConversation({persistCurrent:false,submitExecution});
     canvasAgentRenderProjects();
     canvasAgentSyncPromptSuggestions();
     canvasAgentHideProjectPopover();
@@ -15713,8 +15732,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       if(next&&!await canvasAgentLoadProjectHistory(next,revision))return false;
       if(revision!==canvasAgent.projectSelectionRevision||next!==canvasAgent.projectId)return false;
       canvasAgentRenderHistoryList();
-      if(canvasAgent.socket?.readyState===WebSocket.OPEN||canvasAgent.connectPromise)await canvasAgentStartNewConversation(selectedAiConnectionId(),{resetProjection:false,submitExecution});
-      else canvasAgentDropSessionIdentity();
+      if(canvasAgent.socket?.readyState===WebSocket.OPEN||canvasAgent.connectPromise)await canvasAgentChangeContext({submitExecution});
       return true;
     }catch(error){
       if(revision!==canvasAgent.projectSelectionRevision||next!==canvasAgent.projectId)return false;
@@ -15939,6 +15957,11 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       remaining-=text.length;
     }
     return retained;
+  }
+  function canvasAgentContinuationHistory() {
+    return canvasAgent.pendingConversationHistory.length
+      ? canvasAgent.pendingConversationHistory.slice()
+      : canvasAgentConversationHistory(canvasAgent.currentConversation);
   }
   function canvasAgentRenderEmpty() {
     const empty=document.createElement("div"), title=document.createElement("strong"), body=document.createElement("span");
@@ -16296,7 +16319,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
   }
   function canvasAgentTranscriptNearLatest() {
     const remaining = canvasAgentTranscript.scrollHeight - canvasAgentTranscript.clientHeight - canvasAgentTranscript.scrollTop;
-    return remaining <= 32;
+    return remaining <= CANVAS_AGENT_FOLLOW_LATEST_PX;
   }
   function canvasAgentSyncFollowLatest() {
     canvasAgent.followLatest = canvasAgentTranscriptNearLatest();
@@ -16306,6 +16329,13 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     canvasAgentTranscript.scrollTop = Math.max(0,canvasAgentTranscript.scrollHeight-canvasAgentTranscript.clientHeight);
     canvasAgent.followLatest = true;
     return true;
+  }
+  function canvasAgentScheduleScrollToLatest() {
+    if (!canvasAgent.followLatest || canvasAgent.scrollLatestFrame) return;
+    canvasAgent.scrollLatestFrame=requestAnimationFrame(()=>{
+      canvasAgent.scrollLatestFrame=0;
+      canvasAgentScrollToLatest();
+    });
   }
   function canvasAgentCompactPanel() {
     return Boolean(window.matchMedia && window.matchMedia("(max-width: 700px)").matches);
@@ -16944,13 +16974,69 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       return parsed.href;
     }catch{return "";}
   }
+  function canvasAgentDisplayMathSegments(value) {
+    const text=String(value||"").replace(/\r\n?/g,"\n"),segments=[];
+    const escaped=index=>{let slashes=0;for(let at=index-1;at>=0&&text[at]==="\\";at--)slashes++;return slashes%2===1;};
+    const appendText=(start,end)=>{if(end>start)segments.push({type:"text",text:text.slice(start,end)});};
+    let cursor=0,index=0,inCode=false;
+    while(index<text.length-1){
+      if(text[index]==="`"&&!escaped(index)){inCode=!inCode;index++;continue;}
+      if(inCode){index++;continue;}
+      let opening="",closing="";
+      if(text.startsWith("\\[",index)&&!escaped(index)){opening="\\[";closing="\\]";}
+      else if(text.startsWith("$$",index)&&!escaped(index)){opening="$$";closing="$$";}
+      else{index++;continue;}
+      let end=text.indexOf(closing,index+opening.length);
+      while(end>=0&&escaped(end))end=text.indexOf(closing,end+closing.length);
+      if(end<0){index+=opening.length;continue;}
+      appendText(cursor,index);
+      const stop=end+closing.length,raw=text.slice(index,stop),tex=text.slice(index+opening.length,end);
+      if(tex.trim())segments.push({type:"math",tex,raw,display:true});else segments.push({type:"text",text:raw});
+      cursor=stop;index=stop;
+    }
+    appendText(cursor,text.length);
+    return segments;
+  }
+  function canvasAgentSafeMathJaxNode(node) {
+    if(!node||typeof node.querySelector!=="function"||!node.querySelector("svg")||node.querySelector('[data-mml-node="merror"], mjx-merror'))return false;
+    for(const element of [node,...node.querySelectorAll("*")]){
+      if(["script","style","foreignobject","iframe","object","embed"].includes(String(element.localName||element.tagName||"").toLowerCase()))return false;
+      for(const attribute of element.attributes||[]){
+        const name=String(attribute.name||"").toLowerCase(),value=String(attribute.value||"").trim();
+        if(name.startsWith("on")||name==="style"&&/(?:url\s*\(|expression\s*\()/i.test(value)||["href","src","data","action"].includes(name)&&value&&!value.startsWith("#")||name.endsWith(":href")&&value&&!value.startsWith("#"))return false;
+      }
+    }
+    return true;
+  }
+  function canvasAgentMarkdownMathNode(segment) {
+    const tex=String(segment?.tex||""),raw=String(segment?.raw||tex),node=document.createElement("span"),mathJax=globalThis.MathJax;
+    node.className=`canvas-agent-markdown-math ${segment?.display?"is-display":"is-inline"}`;
+    node.textContent=raw;
+    if(!tex.trim()||tex.length>CANVAS_AGENT_MARKDOWN_MATH_SOURCE_LIMIT||typeof mathJax?.tex2svgPromise!=="function"){
+      node.classList.add("is-fallback");return node;
+    }
+    node.classList.add("is-pending");
+    let rendering;
+    try{rendering=mathJax.tex2svgPromise(tex,{display:Boolean(segment?.display)});}
+    catch{node.classList.remove("is-pending");node.classList.add("is-fallback");return node;}
+    void Promise.resolve(rendering).then(rendered=>{
+      if(!canvasAgentSafeMathJaxNode(rendered))throw Error("Unsafe MathJax output");
+      rendered.setAttribute?.("aria-hidden","true");
+      node.replaceChildren(rendered);
+      node.classList.remove("is-pending","is-fallback");
+      node.classList.add("is-rendered");
+      node.setAttribute("role","math");
+      node.setAttribute("aria-label",tex.trim());
+    }).catch(()=>{node.classList.remove("is-pending");node.classList.add("is-fallback");});
+    return node;
+  }
   function canvasAgentAppendMarkdownStyled(parent,value) {
     const segments=MIXED_TEXT?.tokenizeInline?.(String(value||""))||[{type:"text",text:String(value||"")}];
     for(const segment of segments){
-      const content=segment.type==="math"?segment.raw:segment.text;
       let node;
-      if(segment.code){node=document.createElement("code");node.textContent=content;}
-      else node=document.createTextNode(content||"");
+      if(segment.type==="math")node=canvasAgentMarkdownMathNode(segment);
+      else if(segment.code){node=document.createElement("code");node.textContent=segment.text;}
+      else node=document.createTextNode(segment.text||"");
       if(segment.italic){const emphasis=document.createElement("em");emphasis.append(node);node=emphasis;}
       if(segment.bold){const strong=document.createElement("strong");strong.append(node);node=strong;}
       parent.append(node);
@@ -16993,9 +17079,24 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       else if("*_`[]<>$^".includes(character))markers++;
       if(lines>CANVAS_AGENT_MARKDOWN_LINE_LIMIT||markers>CANVAS_AGENT_MARKDOWN_MARKER_LIMIT||backslashes>CANVAS_AGENT_MARKDOWN_BACKSLASH_LIMIT)return false;
     }
+    try{
+      let mathCount=0;
+      for(const segment of MIXED_TEXT?.tokenizeInline?.(text)||[]){
+        if(segment.type!=="math")continue;
+        if(++mathCount>CANVAS_AGENT_MARKDOWN_MATH_COUNT_LIMIT||String(segment.tex||"").length>CANVAS_AGENT_MARKDOWN_MATH_SOURCE_LIMIT)return false;
+      }
+    }catch{return false;}
     return true;
   }
   function canvasAgentAppendMarkdown(parent,value) {
+    const displaySegments=canvasAgentDisplayMathSegments(value);
+    if(displaySegments.some(segment=>segment.type==="math")){
+      for(const segment of displaySegments){
+        if(segment.type==="math")parent.append(canvasAgentMarkdownMathNode(segment));
+        else canvasAgentAppendMarkdown(parent,segment.text);
+      }
+      return;
+    }
     const lines=String(value||"").replace(/\r\n?/g,"\n").split("\n");
     let paragraph=null,paragraphHardBreak=false,list=null,quote=null;
     const reset=()=>{paragraph=null;paragraphHardBreak=false;list=null;quote=null;};
@@ -17463,6 +17564,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
         target.historyItem.resultText=canvasAgentHistoryText(resultText,8000);
         canvasAgentRenderToolRow(target);
         canvasAgentScheduleHistoryPersist(0);
+        if (!canvasAgent.viewingHistoryId) canvasAgentScrollToLatest();
       }
     } else if (event.kind === "turn_end") {
       canvasAgent.requestPending = false;
@@ -17473,11 +17575,15 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
         canvasAgentErrorRow(canvasAgent.lastTurnError,{eventKey:`turn:${event.turn}`});
         canvasAgentSetStatus(canvasAgentErrorSummary(canvasAgent.lastTurnError),"error");
       }
+      if(!canvasAgent.viewingHistoryId)canvasAgentScrollToLatest();
       canvasAgentSyncState();
       canvasAgentPersistCurrentConversation();
       const pendingConnectionChange=canvasAgent.pendingConnectionChange;
       canvasAgent.pendingConnectionChange=null;
       if(pendingConnectionChange)canvasAgentConnectionDidChange(pendingConnectionChange.force,pendingConnectionChange.provider);
+      const pendingContextChange=canvasAgent.pendingContextChange;
+      canvasAgent.pendingContextChange=null;
+      if(pendingContextChange)canvasAgentContextDidChange(pendingContextChange.force);
     }
   }
   async function canvasAgentHandleMessage(message) {
@@ -17515,13 +17621,14 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       canvasAgentRenderProjects();
       try { sessionStorage.setItem(CANVAS_AGENT_SESSION_KEY,JSON.stringify({sessionId:canvasAgent.sessionId,resumeToken:canvasAgent.resumeToken,connectionId:canvasAgent.connectionId,engine:canvasAgent.sessionEngine,projectId:canvasAgent.sessionProjectId,accessMode:canvasAgent.sessionAccessMode})); } catch {}
       canvasAgentSetStatus(t(envelope.payload?.resumed ? "canvasAgentResumed" : "canvasAgentReady"),"ready");
-      if (envelope.payload?.resumed) {
+      const replayBacklog=envelope.payload?.resumed&&!canvasAgent.currentConversation?.items?.length;
+      if (replayBacklog) {
         canvasAgent.currentConversation.items=[];
         if (!canvasAgent.viewingHistoryId) canvasAgentTranscript.replaceChildren();
         canvasAgent.assistantRows.clear();
         canvasAgent.toolRows.clear();
       }
-      for (const event of envelope.payload?.backlog || []) canvasAgentHandleEvent(event,{replay:true});
+      if(replayBacklog)for (const event of envelope.payload?.backlog || []) canvasAgentHandleEvent(event,{replay:true});
       if (!canvasAgent.viewingHistoryId&&!canvasAgentTranscript.childElementCount) canvasAgentRenderEmpty();
       canvasAgentPersistCurrentConversation();
       canvasAgentScrollToLatest(true);
@@ -17627,7 +17734,8 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     if(selectedAiConnectionId()!==connectionId)return canvasAgentStartNewConversation(selectedAiConnectionId(),{resetProjection:false,submitExecution,preserveDraft,preserveConversation});
     canvasAgentBeginSessionTransition();
     const handshakeId=canvasClientId(),provider=canvasAgentConnectionProvider(connectionId);
-    await canvasAgentWaitForReady(()=>canvasAgentSendEnvelope("new_conversation",{handshakeId,connectionId,webSearchEnabled:canvasAgent.searchEnabled,widgetCapabilities,projectId:canvasAgent.projectId,accessMode:canvasAgentEffectiveAccessMode(),...(canvasAgent.pendingConversationHistory.length?{conversationHistory:canvasAgent.pendingConversationHistory}:{})}),{handshakeId,provider});
+    const conversationHistory=canvasAgentContinuationHistory();
+    await canvasAgentWaitForReady(()=>canvasAgentSendEnvelope("new_conversation",{handshakeId,connectionId,conversationId:canvasAgent.currentConversation?.id||"",webSearchEnabled:canvasAgent.searchEnabled,widgetCapabilities,projectId:canvasAgent.projectId,accessMode:canvasAgentEffectiveAccessMode(),...(conversationHistory.length?{conversationHistory}:{})}),{handshakeId,provider});
     if(selectedAiConnectionId()!==connectionId)return canvasAgentStartNewConversation(selectedAiConnectionId(),{resetProjection:false,submitExecution,preserveDraft,preserveConversation});
   }
   async function canvasAgentChangeConnection(connectionId = selectedAiConnectionId(), {submitExecution=null}={}) {
@@ -17645,8 +17753,33 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     canvasAgentSetStatus(t("canvasAgentConnecting"),"connecting");
     canvasAgentBeginSessionTransition();
     const handshakeId=canvasClientId(),provider=canvasAgentConnectionProvider(connectionId);
-    await canvasAgentWaitForReady(()=>canvasAgentSendEnvelope("change_connection",{handshakeId,connectionId,webSearchEnabled:canvasAgent.searchEnabled,widgetCapabilities,projectId:canvasAgent.projectId,accessMode:canvasAgentEffectiveAccessMode()}),{handshakeId,provider});
+    await canvasAgentWaitForReady(()=>canvasAgentSendEnvelope("change_connection",{handshakeId,connectionId,conversationId:canvasAgent.currentConversation?.id||"",webSearchEnabled:canvasAgent.searchEnabled,widgetCapabilities,projectId:canvasAgent.projectId,accessMode:canvasAgentEffectiveAccessMode()}),{handshakeId,provider});
     if(selectedAiConnectionId()!==connectionId)return canvasAgentChangeConnection(selectedAiConnectionId(),{submitExecution});
+  }
+  function canvasAgentSessionContextMatches() {
+    return canvasAgent.sessionSearchEnabled===canvasAgent.searchEnabled
+      && canvasAgent.sessionProjectId===canvasAgent.projectId
+      && canvasAgent.sessionAccessMode===canvasAgentEffectiveAccessMode();
+  }
+  async function canvasAgentChangeContext({submitExecution=null,force=false}={}) {
+    if((canvasAgent.running||canvasAgent.requestPending)&&!submitExecution){canvasAgent.pendingContextChange={force:Boolean(force)};return;}
+    if(canvasAgent.connectPromise)await canvasAgent.connectPromise;
+    if(canvasAgent.socket?.readyState!==WebSocket.OPEN||!canvasAgent.sessionId||!canvasAgent.sessionReady)return canvasAgentConnect({submitExecution});
+    if(!force&&canvasAgentSessionContextMatches())return;
+    if(submitExecution)canvasAgentAssertSubmitExecution(submitExecution);
+    else canvasAgentInvalidateSubmitExecution();
+    const connectionId=selectedAiConnectionId(),widgetCapabilities=await canvasAgentCurrentWidgetCapabilities();
+    if(submitExecution)canvasAgentAssertSubmitExecution(submitExecution);
+    if(selectedAiConnectionId()!==connectionId)return canvasAgentChangeContext({submitExecution,force});
+    canvasAgentSetStatus(t("canvasAgentConnecting"),"connecting");
+    canvasAgentBeginSessionTransition();
+    const handshakeId=canvasClientId(),provider=canvasAgentConnectionProvider(connectionId);
+    await canvasAgentWaitForReady(()=>canvasAgentSendEnvelope("change_context",{
+      handshakeId,connectionId,conversationId:canvasAgent.currentConversation?.id||"",webSearchEnabled:canvasAgent.searchEnabled,
+      widgetCapabilities,projectId:canvasAgent.projectId,accessMode:canvasAgentEffectiveAccessMode(),
+    }),{handshakeId,provider});
+    if(selectedAiConnectionId()!==connectionId||!canvasAgentSessionContextMatches())return canvasAgentChangeContext({submitExecution});
+    canvasAgent.pendingContextChange=null;
   }
   async function canvasAgentConnect(options) {
     const {submitExecution=null}=options||{};
@@ -17654,12 +17787,12 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     if(submitExecution)canvasAgentAssertSubmitExecution(submitExecution);
     const connectionId = selectedAiConnectionId();
     if (canvasAgent.socket?.readyState === WebSocket.OPEN && canvasAgent.sessionId) {
-      if (canvasAgent.sessionReady&&canvasAgent.connectionId === connectionId&&canvasAgent.sessionProjectId===canvasAgent.projectId&&canvasAgent.sessionAccessMode===canvasAgentEffectiveAccessMode()) return;
-      if(canvasAgent.sessionReady&&canvasAgent.sessionProjectId===canvasAgent.projectId&&canvasAgent.sessionAccessMode===canvasAgentEffectiveAccessMode()){
+      if (canvasAgent.sessionReady&&canvasAgent.connectionId === connectionId&&canvasAgentSessionContextMatches()) return;
+      if(canvasAgent.sessionReady&&canvasAgent.connectionId!==connectionId){
         await canvasAgentChangeConnection(connectionId,{submitExecution});
-        return;
+        return canvasAgentConnect({submitExecution});
       }
-      await canvasAgentStartNewConversation(connectionId,{submitExecution});
+      await canvasAgentChangeContext({submitExecution});
       return canvasAgentConnect({submitExecution});
     }
     if (canvasAgent.connectPromise) {
@@ -17681,17 +17814,19 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
         if(socket!==canvasAgent.socket){socket.close();return;}
         canvasAgent.outgoingSeq = 0;
         canvasAgent.incomingSeq = 0;
+        const conversationHistory=canvasAgentContinuationHistory();
         canvasAgentSendEnvelope("hello",{
           handshakeId,
           canvasSessionId:canvasAgent.sessionId,
           resumeToken:canvasAgent.resumeToken,
           clientId:canvasAgent.clientId,
           connectionId,
+          conversationId:canvasAgent.currentConversation?.id||"",
           webSearchEnabled:canvasAgent.searchEnabled,
           widgetCapabilities,
           projectId:canvasAgent.projectId,
           accessMode:canvasAgentEffectiveAccessMode(),
-          ...(canvasAgent.pendingConversationHistory.length?{conversationHistory:canvasAgent.pendingConversationHistory}:{}),
+          ...(conversationHistory.length?{conversationHistory}:{}),
         });
       });
       socket.addEventListener("message",event=>void canvasAgentHandleMessage(event));
@@ -17739,9 +17874,18 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     const action = canvasAgentChangeConnection(selectedAiConnectionId());
     void action.catch(error=>canvasAgentSetStatus(String(error?.message||error),"error"));
   }
+  function canvasAgentContextDidChange(force = false) {
+    const connectionActive=canvasAgent.socket?.readyState===WebSocket.OPEN||Boolean(canvasAgent.connectPromise);
+    if(!connectionActive)return;
+    if(canvasAgent.running||canvasAgent.requestPending){
+      canvasAgent.pendingContextChange={force:Boolean(force)||Boolean(canvasAgent.pendingContextChange?.force)};
+      return;
+    }
+    void canvasAgentChangeContext({force}).catch(error=>canvasAgentSetStatus(String(error?.message||error),"error"));
+  }
   async function canvasAgentEnsureSearchSession(submitExecution=null) {
     if (canvasAgent.sessionSearchEnabled === canvasAgent.searchEnabled || canvasAgent.socket?.readyState !== WebSocket.OPEN || !canvasAgent.sessionReady || !canvasAgent.sessionId) return;
-    await canvasAgentStartNewConversation(selectedAiConnectionId(),{submitExecution,preserveDraft:true});
+    await canvasAgentChangeContext({submitExecution});
   }
 
   function canvasAgentValidatedRegion(value) {
@@ -18722,9 +18866,6 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
   canvasAgentPanel.addEventListener("focusin",canvasAgentPauseAutomaticAI);
   canvasAgentPanel.addEventListener("focusout",()=>queueMicrotask(canvasAgentResumeAutomaticAI));
   canvasAgentTranscript.addEventListener("scroll",canvasAgentSyncFollowLatest,{passive:true});
-  canvasAgentTranscript.addEventListener("wheel",event=>{
-    if (event.deltaY < 0) canvasAgent.followLatest = false;
-  },{passive:true});
   document.addEventListener("paste",event=>{
     if (canvasAgentPanel.hidden||canvasAgentProjectDialogOpen()) return;
     const target = event.target, outsideEditable = target instanceof Element && !canvasAgentPanel.contains(target) && (target.isContentEditable || Boolean(target.closest("input, textarea, select")));
@@ -18738,7 +18879,10 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     if(files.length)void canvasAgentHandleFiles(files);
     else void canvasAgentDesktopClipboardFiles().then(desktopFiles=>desktopFiles.length?canvasAgentHandleFiles(desktopFiles):canvasAgentSetStatus(t("canvasAgentFileReadFailed"),"error")).catch(error=>canvasAgentSetStatus(String(error?.message||error),"error"));
   },true);
-  if (typeof ResizeObserver==="function") new ResizeObserver(()=>{canvasAgentSchedulePanelSizeSave();canvasAgentResizeInput();}).observe(canvasAgentPanel);
+  if (typeof ResizeObserver==="function") {
+    new ResizeObserver(()=>{canvasAgentSchedulePanelSizeSave();canvasAgentResizeInput();}).observe(canvasAgentPanel);
+    new ResizeObserver(canvasAgentScheduleScrollToLatest).observe(canvasAgentTranscript);
+  }
   canvasAgentResizeInput();
   window.addEventListener("resize",()=>requestAnimationFrame(()=>{canvasAgentRestorePanelSize();canvasAgentRestorePanelPosition();}),{passive:true});
   window.addEventListener("beforeunload",canvasAgentPersistCurrentConversation);
@@ -19327,7 +19471,10 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     const eraserMode = ["eraser", "area-eraser"].includes(mode),
       button = eraserMode ? eraserToolButton : document.querySelector(`[data-mode="${mode}"]`);
     if (!button) return;
-    if (eraserMode) state.eraserMode = mode;
+    if (eraserMode) {
+      state.eraserMode = mode;
+      localStorage.setItem(ERASER_MODE_STORAGE_KEY, mode);
+    }
     if (state.areaEraseGesture) cancelAreaEraseGesture();
     hideEraserToolMenu();
     const finalizingPendingWidgetForEraser = eraserMode && ["hand", "pen"].includes(state.mode)

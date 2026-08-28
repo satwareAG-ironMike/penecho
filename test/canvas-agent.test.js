@@ -256,6 +256,7 @@ const DIRECT_HARNESS_DEPENDENCIES = [
 test("PenEcho Agent protocol rejects malformed and replayed envelope facts",async()=>{
   const { parseClientEnvelope } = await import("../src/server/canvas-agent/protocol.mjs");
   assert.deepEqual(parseClientEnvelope(JSON.stringify({version:1,type:"ping",seq:1,payload:{}})),{version:1,type:"ping",seq:1,payload:{}});
+  assert.equal(parseClientEnvelope(JSON.stringify({version:1,type:"change_context",seq:2,payload:{}})).type,"change_context");
   assert.throws(()=>parseClientEnvelope("not-json"),/valid JSON/);
   assert.throws(()=>parseClientEnvelope(JSON.stringify({version:2,type:"ping",seq:1,payload:{}})),/unsupported/);
   assert.throws(()=>parseClientEnvelope(JSON.stringify({version:1,type:"run_bash",seq:1,payload:{}})),/unsupported/);
@@ -442,8 +443,8 @@ test("PenEcho Agent maps full API endpoints back to pi-ai provider base URLs",as
     disabled=connectionProfile({id:"disabled",apiFormat:"openai",apiUrl:"https://api.openai.com/v1",apiModel:"gpt-5.6-sol",effort:"none"});
   assert.equal(openai.config.baseURL,"https://gateway.test/openai/v1");
   assert.equal(openai.config.streamIdleTimeoutMs,180_000);
-  assert.equal(openai.config.timeoutMs,540_000);
-  assert.equal(connectionProfile({id:"bounded-timeout",apiFormat:"openai",apiUrl:"https://gateway.test/v1",apiModel:"model"},300_000).config.timeoutMs,600_000);
+  assert.equal(Object.hasOwn(openai.config,"timeoutMs"),false);
+  assert.equal(Object.hasOwn(connectionProfile({id:"unbounded-timeout",apiFormat:"openai",apiUrl:"https://gateway.test/v1",apiModel:"model"},300_000).config,"timeoutMs"),false);
   assert.equal(connectionProfile({id:"anthropic",apiFormat:"anthropic",apiUrl:"https://gateway.test/anthropic/v1/messages",apiModel:"model"}).config.baseURL,"https://gateway.test/anthropic");
   assert.equal(connectionProfile({id:"base",apiFormat:"openai",apiUrl:"https://gateway.test/v1",apiModel:"model"}).config.baseURL,"https://gateway.test/v1");
   assert.equal(CANVAS_AGENT_CONTEXT_WINDOW,160_000);
@@ -1091,7 +1092,7 @@ test("PenEcho Agent terminally stops same-target patching after twenty attempts 
 });
 
 test("PenEcho Agent CLI protocol rejects unregistered tool requests",async()=>{
-  const { PenEchoCliAdapter, cliTotalTimeoutMs, normalizeCliTokenUsage, parseCliDecision } = await import("../src/server/canvas-agent/cli-adapter.mjs");
+  const { PenEchoCliAdapter, normalizeCliTokenUsage, parseCliDecision } = await import("../src/server/canvas-agent/cli-adapter.mjs");
   const { canvasAgentTimeoutLimits } = await import("../src/server/canvas-agent/model-timeout.mjs");
   assert.throws(()=>parseCliDecision('```json\n{"type":"final","text":"done"}\n```'),/entire response/);
   assert.throws(()=>parseCliDecision('{"type":"tool_call","name":"canvas_create","arguments":{"html":"<span class=\\"tag">Main bottleneck</span>"}}',["canvas_create"]),/entire response/);
@@ -1106,10 +1107,7 @@ test("PenEcho Agent CLI protocol rejects unregistered tool requests",async()=>{
   assert.deepEqual(normalizeCliTokenUsage({input_tokens:50,cache_read_input_tokens:90,cache_creation_input_tokens:10,output_tokens:12}),{
     inputTokens:50,outputTokens:12,cacheReadTokens:90,cacheWriteTokens:10,
   });
-  assert.equal(cliTotalTimeoutMs(180_000),540_000);
-  assert.equal(cliTotalTimeoutMs(300_000),600_000);
-  assert.equal(cliTotalTimeoutMs(600_000),600_000);
-  assert.deepEqual(canvasAgentTimeoutLimits(180_000),{idleTimeoutMs:180_000,totalTimeoutMs:540_000});
+  assert.deepEqual(canvasAgentTimeoutLimits(180_000),{idleTimeoutMs:180_000});
   const usageAdapter=new PenEchoCliAdapter({
     callCli:async request=>{
       assert.equal(typeof request.onActivity,"function");
@@ -1182,7 +1180,7 @@ test("PenEcho Agent CLI sends a fresh authoritative Harness snapshot on every mo
   assert.equal(adapter.sessionManager,undefined);
 });
 
-test("PenEcho Agent hard-stops a model step that emits activity forever",async t=>{
+test("PenEcho Agent lets an active model step run beyond the former total-time multiplier",async t=>{
   const stateDirectory=fs.mkdtempSync(path.join(os.tmpdir(),"penecho-canvas-agent-model-step-timeout-test-"));
   t.after(()=>fs.rmSync(stateDirectory,{recursive:true,force:true}));
   const {CanvasHarnessHost}=await import("../src/server/canvas-agent/runtime.mjs"),messages=[],
@@ -1192,18 +1190,18 @@ test("PenEcho Agent hard-stops a model step that emits activity forever",async t
       callCli:({signal,onActivity})=>new Promise((resolve,reject)=>{
         const timer=setInterval(onActivity,5),finish=()=>{clearInterval(timer);reject(signal.reason instanceof Error?signal.reason:new Error("aborted"));};
         signal.addEventListener("abort",finish,{once:true});
+        setTimeout(()=>{clearInterval(timer);resolve('{"type":"final","text":"active request completed"}');},140);
       }),
     });
   t.after(()=>host.dispose());
   const session=await host.connect({clientId:"heartbeat-client",connectionId:connection.id,binding:{},send:(type,payload)=>messages.push({type,payload})});
   host.updateState(session,{revision:1,viewRevision:1,canvas:{width:20000,height:20000},counts:{},objects:[]});
-  await host.submit(session,"Keep sending provider activity forever.");
-  await new Promise(resolve=>setTimeout(resolve,300));
+  await host.submit(session,"Keep sending provider activity until the request completes.");
+  await waitFor(()=>messages.some(message=>message.type==="session_event"&&message.payload.kind==="turn_end"),4000);
   assert.ok(messages.some(message=>message.type==="session_event"&&message.payload.kind==="turn_end"),JSON.stringify(messages));
   const ended=messages.findLast(message=>message.type==="session_event"&&message.payload.kind==="turn_end");
-  assert.equal(ended.payload.reason.kind,"error");
-  assert.equal(ended.payload.reason.error.code,"TIMEOUT");
-  assert.match(ended.payload.reason.error.message,/1-second total limit/);
+  assert.equal(ended.payload.reason.kind,"completed");
+  assert.ok(messages.some(message=>message.type==="session_event"&&message.payload.kind==="assistant_message"&&message.payload.text==="active request completed"));
 });
 
 test("PenEcho Agent CLI keeps the user visual reference beside the latest generated capture",async()=>{
@@ -1585,18 +1583,22 @@ test("PenEcho Agent lets the latest overview clear a pending layout review after
   assert.equal(currentRevision,6);
 });
 
-test("PenEcho Agent enforces a terminal per-user-turn Canvas tool-call fuse",async t=>{
+test("PenEcho Agent enforces a configurable per-request round fuse and preserves the conversation",async t=>{
   const stateDirectory=fs.mkdtempSync(path.join(os.tmpdir(),"penecho-canvas-tool-fuse-test-"));
   t.after(()=>fs.rmSync(stateDirectory,{recursive:true,force:true}));
-  const {CanvasHarnessHost,CANVAS_AGENT_MAX_TOOL_CALLS_PER_USER_TURN}=await import("../src/server/canvas-agent/runtime.mjs"),calls=[],messages=[],browserCalls=[],
+  const {CanvasHarnessHost}=await import("../src/server/canvas-agent/runtime.mjs"),calls=[],messages=[],browserCalls=[],
     connection={id:"tool-fuse-cli",provider:"codex-cli",name:"Tool Fuse",cliPath:"codex-test",cliModel:"gpt-test",effort:"medium"};
-  let session;
+  let session,exerciseFuse=true;
   const host=new CanvasHarnessHost({
     stateDirectory,rootDirectory:ROOT,resolveConnection:id=>id===connection.id?connection:null,listConnections:()=>[connection],
+    canvasAgentTurnLimit:()=>50,
     callCli:async request=>{
       calls.push(request);
-      session.canvasTurnBudget.toolCalls=CANVAS_AGENT_MAX_TOOL_CALLS_PER_USER_TURN;
-      return JSON.stringify({type:"tool_call",name:"canvas_inspect",arguments:{scope:"canvas"}});
+      if(exerciseFuse){
+        session.canvasTurnBudget.toolCalls=50;
+        return JSON.stringify({type:"tool_call",name:"canvas_inspect",arguments:{scope:"canvas"}});
+      }
+      return JSON.stringify({type:"final",text:"continued in the same conversation"});
     },
   }),send=(type,payload)=>{messages.push({type,payload});if(type==="tool_request")browserCalls.push(payload.name);};
   t.after(()=>host.dispose());
@@ -1607,7 +1609,12 @@ test("PenEcho Agent enforces a terminal per-user-turn Canvas tool-call fuse",asy
   assert.equal(calls.length,1);
   assert.deepEqual(browserCalls,[]);
   assert.equal(session.canvasTurnBudget.stop?.code,"CANVAS_AGENT_TOOL_LIMIT_STOPPED");
-  assert.equal(session.canvasTurnBudget.stop?.details?.maxToolCalls,CANVAS_AGENT_MAX_TOOL_CALLS_PER_USER_TURN);
+  assert.equal(session.canvasTurnBudget.stop?.details?.maxRounds,50);
+  assert.equal(host.sessions.has(session.id),true);
+  exerciseFuse=false;
+  await host.submit(session,"Continue after the round limit.");
+  await waitFor(()=>messages.some(message=>message.type==="session_event"&&message.payload.kind==="assistant_message"&&message.payload.text==="continued in the same conversation"),4000);
+  assert.equal(host.sessions.has(session.id),true);
 });
 
 test("PenEcho Agent admits pasted images through the existing Harness attachment seam",async t=>{
@@ -2399,12 +2406,14 @@ test("PenEcho Agent mounts the minimal project tools only for a host-resolved pr
 test("PenEcho Agent reads multiple turn-scoped files without replacing the conversation project",async t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),"penecho-canvas-agent-turn-files-")),stateDirectory=path.join(root,"state"),files=path.join(root,"files");
   fs.mkdirSync(files,{recursive:true});
-  const firstPath=path.join(files,"first.txt"),secondPath=path.join(files,"second.txt");
+  const firstPath=path.join(files,"first.txt"),secondPath=path.join(files,"second.txt"),binaryPath=path.join(files,"sample.bin");
   fs.writeFileSync(firstPath,"first attachment\nshared value: 1\n");
-  fs.writeFileSync(secondPath,"second attachment\nshared value: 2\n");
-  const firstId="file-111111111111111111111111",secondId="file-222222222222222222222222",projects=[
+  fs.writeFileSync(secondPath,["second attachment","shared value: 2",...Array.from({length:448},(_,index)=>`long attachment line ${index+3}`)].join("\n")+"\n");
+  fs.writeFileSync(binaryPath,Buffer.from("ABC"));
+  const firstId="file-111111111111111111111111",secondId="file-222222222222222222222222",binaryId="file-333333333333333333333333",projects=[
     {id:firstId,kind:"file",source:"upload",name:"first.txt",displayPath:"first.txt",path:fs.realpathSync(firstPath),reader:"text",mediaType:"text/plain",bytes:fs.statSync(firstPath).size},
     {id:secondId,kind:"file",source:"upload",name:"second.txt",displayPath:"second.txt",path:fs.realpathSync(secondPath),reader:"text",mediaType:"text/plain",bytes:fs.statSync(secondPath).size},
+    {id:binaryId,kind:"file",source:"upload",name:"sample.bin",displayPath:"sample.bin",path:fs.realpathSync(binaryPath),reader:"binary",mediaType:"application/octet-stream",bytes:fs.statSync(binaryPath).size},
   ],resolveProject=async id=>projects.find(project=>project.id===id)||null,
     connection={id:"turn-files-test",provider:"api",name:"Turn Files Test",apiFormat:"openai",apiUrl:"http://127.0.0.1:9/v1",apiModel:"test-model",apiKey:"test-key",effort:"medium"},
     runtime=await import("../src/server/canvas-agent/runtime.mjs"),host=new runtime.CanvasHarnessHost({stateDirectory,rootDirectory:ROOT,resolveConnection:id=>id===connection.id?connection:null,listConnections:()=>[connection],resolveProject});
@@ -2412,18 +2421,36 @@ test("PenEcho Agent reads multiple turn-scoped files without replacing the conve
   const session=await host.connect({clientId:"turn-files-client",connectionId:connection.id,binding:{},send:()=>{}}),visible=session.handle.agent.ctx.tools.schemas(session.handle.agent).map(tool=>tool.name);
   assert.equal(session.project,null);
   assert.equal(visible.includes("read_attachment"),true);
-  session.turnFiles=await runtime.prepareCanvasAgentTurnFiles(session,resolveProject,[firstId,secondId],3);
-  assert.deepEqual(host.activeProjectIds().sort(),[firstId,secondId]);
+  const attachmentSchema=session.handle.agent.ctx.tools.schemas(session.handle.agent).find(tool=>tool.name==="read_attachment");
+  assert.match(attachmentSchema.description,/offset is 1-based; omit it for the first read/);
+  assert.match(attachmentSchema.parameters.properties.limit.description,/default\/max 2000/);
+  session.turnFiles=await runtime.prepareCanvasAgentTurnFiles(session,resolveProject,[firstId,secondId,binaryId],2);
+  assert.deepEqual(host.activeProjectIds().sort(),[firstId,secondId,binaryId]);
   const signal=new AbortController().signal,first=await host.context.tools.execute({callId:"read-first-turn-file",name:"read_attachment",arguments:{file_id:firstId},agent:session.handle.agent,signal}),
     second=await host.context.tools.execute({callId:"read-second-turn-file",name:"read_attachment",arguments:{file_id:secondId},agent:session.handle.agent,signal}),
-    unavailable=await host.context.tools.execute({callId:"read-unavailable-turn-file",name:"read_attachment",arguments:{file_id:"file-333333333333333333333333"},agent:session.handle.agent,signal});
+    firstLine=await host.context.tools.execute({callId:"read-first-turn-file-one",name:"read_attachment",arguments:{file_id:firstId,offset:1,limit:1},agent:session.handle.agent,signal}),
+    secondLine=await host.context.tools.execute({callId:"read-first-turn-file-two",name:"read_attachment",arguments:{file_id:firstId,offset:2,limit:1},agent:session.handle.agent,signal}),
+    binaryFirst=await host.context.tools.execute({callId:"read-binary-turn-file-one",name:"read_attachment",arguments:{file_id:binaryId,offset:1,limit:1},agent:session.handle.agent,signal}),
+    binarySecond=await host.context.tools.execute({callId:"read-binary-turn-file-two",name:"read_attachment",arguments:{file_id:binaryId,offset:2,limit:1},agent:session.handle.agent,signal}),
+    invalidOffset=await host.context.tools.execute({callId:"read-first-turn-file-zero",name:"read_attachment",arguments:{file_id:firstId,offset:0,limit:1},agent:session.handle.agent,signal}),
+    unavailable=await host.context.tools.execute({callId:"read-unavailable-turn-file",name:"read_attachment",arguments:{file_id:"file-444444444444444444444444"},agent:session.handle.agent,signal});
   assert.equal(first.isError,false,JSON.stringify(first));
   assert.equal(second.isError,false,JSON.stringify(second));
   assert.match(first.content[0].text,/first attachment[\s\S]*shared value: 1/);
   assert.match(second.content[0].text,/second attachment[\s\S]*shared value: 2/);
+  assert.match(second.content[0].text,/450: long attachment line 450/);
+  assert.doesNotMatch(second.content[0].text,/Use offset=/,"omitting limit must not impose a hidden 200-line attachment window");
+  assert.match(firstLine.content[0].text,/1: first attachment[\s\S]*Use offset=2 to continue/);
+  assert.doesNotMatch(firstLine.content[0].text,/shared value: 1/);
+  assert.match(secondLine.content[0].text,/2: shared value: 1/);
+  assert.doesNotMatch(secondLine.content[0].text,/first attachment/);
+  assert.match(binaryFirst.content[0].text,/00000000[\s\S]*\|A\|[\s\S]*Use offset=2 to continue/);
+  assert.match(binarySecond.content[0].text,/00000001[\s\S]*\|B\|[\s\S]*Use offset=3 to continue/);
+  assert.equal(invalidOffset.isError,true);
+  assert.match(invalidOffset.content[0].text,/offset must be a positive integer/);
   assert.equal(unavailable.isError,true);
   assert.match(unavailable.content[0].text,/not attached to the current/);
-  await assert.rejects(runtime.prepareCanvasAgentTurnFiles(session,resolveProject,[firstId,secondId],4),/at most five files and images/);
+  await assert.rejects(runtime.prepareCanvasAgentTurnFiles(session,resolveProject,[firstId,secondId,binaryId],3),/at most five files and images/);
   await runtime.clearCanvasAgentTurnFiles(session);
   assert.deepEqual(host.activeProjectIds(),[]);
 });
@@ -2632,12 +2659,15 @@ test("PenEcho Agent paste collects multiple browser and desktop clipboard files 
   await assert.rejects(readDesktop(),/canvasAgentAttachmentLimit/);
 });
 
-test("PenEcho Agent preserves pasted draft files while the search toggle replaces its session",()=>{
-  const source=read("src/client/app/canvas-agent-runtime.js"),beginStart=source.indexOf("function canvasAgentBeginLocalConversation("),conversationStart=source.indexOf("async function canvasAgentStartNewConversation("),searchStart=source.indexOf("async function canvasAgentEnsureSearchSession("),beginConversation=source.slice(beginStart,source.indexOf("function canvasAgentDropSessionIdentity(",beginStart)),startConversation=source.slice(conversationStart,source.indexOf("async function canvasAgentConnect(",conversationStart)),ensureSearch=source.slice(searchStart,source.indexOf("function canvasAgentValidatedRegion(",searchStart));
+test("PenEcho Agent preserves the logical conversation and pasted draft files when search context changes",()=>{
+  const source=read("src/client/app/canvas-agent-runtime.js"),beginStart=source.indexOf("function canvasAgentBeginLocalConversation("),conversationStart=source.indexOf("async function canvasAgentStartNewConversation("),contextStart=source.indexOf("async function canvasAgentChangeContext("),searchStart=source.indexOf("async function canvasAgentEnsureSearchSession("),beginConversation=source.slice(beginStart,source.indexOf("function canvasAgentDropSessionIdentity(",beginStart)),startConversation=source.slice(conversationStart,source.indexOf("async function canvasAgentChangeConnection(",conversationStart)),ensureSearch=source.slice(searchStart,source.indexOf("function canvasAgentValidatedRegion(",searchStart)),changeContext=source.slice(contextStart,source.indexOf("async function canvasAgentConnect(",contextStart));
   assert.match(beginConversation,/preserveDraft=false[\s\S]*?if\(!preserveDraft\)\{[\s\S]*?canvasAgentClearAttachments\(\)[\s\S]*?canvasAgentClearReferences\(\)[\s\S]*?canvasAgentClearInkDraft\(\)/);
   assert.match(startConversation,/preserveDraft=false[\s\S]*?canvasAgentBeginLocalConversation\(\{submitExecution,preserveDraft\}\)[\s\S]*?if\(!preserveDraft\)\{[\s\S]*?canvasAgentClearAttachments\(\)/);
   assert.match(startConversation,/resetProjection:false,submitExecution,preserveDraft/);
-  assert.match(ensureSearch,/canvasAgentStartNewConversation\(selectedAiConnectionId\(\),\{submitExecution,preserveDraft:true\}\)/);
+  assert.match(ensureSearch,/canvasAgentChangeContext\(\{submitExecution\}\)/);
+  assert.doesNotMatch(ensureSearch,/canvasAgentStartNewConversation|new_conversation/);
+  assert.match(changeContext,/"change_context"[\s\S]*?conversationId:canvasAgent\.currentConversation\?\.id/);
+  assert.doesNotMatch(changeContext,/canvasAgentBeginLocalConversation|canvasAgentClearTranscript|canvasAgentClearAttachments/);
 });
 
 test("PenEcho Agent maps provider failures to concise localized error categories",()=>{
@@ -2750,6 +2780,9 @@ test("PenEcho Agent UI and browser Facade support local and Cloud runtimes and a
   assert.match(functionSource(source,"canvasAgentLoadProjectHistory"),/selectedId=String\(projectId\|\|""\)[\s\S]*?projectSelectionRevision===revision[\s\S]*?if\(!stillSelected\(\)\)return false/);
   assert.match(source,/function canvasAgentEnsureProjects\(\{refresh=false\}=\{\}\)\s*\{[\s\S]*?requestRevision=\+\+canvasAgent\.projectListRequestRevision[\s\S]*?requestRevision!==canvasAgent\.projectListRequestRevision/);
   assert.match(source,/function canvasAgentSelectProject\(projectId,\{expectedRevision=null,submitExecution=null\}=\{\}\) \{[\s\S]*?expectedRevision!==null[\s\S]*?projectSelectionRevision[\s\S]*?canvasAgentResolveApproval\(false\)[\s\S]*?accessMode="controlled"/);
+  const selectProjectSource=source.slice(source.indexOf("async function canvasAgentSelectProject("),source.indexOf("async function canvasAgentRemoveProject("));
+  assert.match(selectProjectSource,/canvasAgentChangeContext\(\{submitExecution\}\)/);
+  assert.doesNotMatch(selectProjectSource,/canvasAgentBeginLocalConversation|canvasAgentDropSessionIdentity|canvasAgentStartNewConversation/);
   assert.doesNotMatch(source,/function canvasAgentSetAccessMode|canvasAgentProjectFull\.addEventListener/);
   assert.match(functionSource(source,"canvasAgentRemoveProject"),/canvasAgentRemoveFolderConfirm[\s\S]*?canvasAgentRemoveUploadConfirm[\s\S]*?window\.confirm/);
   for(const key of ["canvasAgentRemoveFolderConfirm","canvasAgentRemoveNativeFileConfirm","canvasAgentRemoveUploadConfirm"]){assert.match(core,new RegExp(`${key}:`));assert.match(zh,new RegExp(`${key}:`));}
@@ -2796,7 +2829,8 @@ test("PenEcho Agent UI and browser Facade support local and Cloud runtimes and a
   assert.match(server,/canvasAgent:true/);
   assert.match(core,/canvasAgentConnectionDidChange\(/);
   assert.match(functionSource(source,"canvasAgentConnect"),/const connectionId = selectedAiConnectionId\(\)/);
-  assert.match(source,/"new_conversation",\{handshakeId,connectionId,webSearchEnabled:canvasAgent\.searchEnabled,widgetCapabilities,projectId:canvasAgent\.projectId,accessMode:canvasAgentEffectiveAccessMode\(\),\.\.\.\(canvasAgent\.pendingConversationHistory\.length\?/);
+  assert.match(source,/"new_conversation",\{handshakeId,connectionId,conversationId:canvasAgent\.currentConversation\?\.id\|\|"",webSearchEnabled:canvasAgent\.searchEnabled,widgetCapabilities,projectId:canvasAgent\.projectId,accessMode:canvasAgentEffectiveAccessMode\(\),\.\.\.\(conversationHistory\.length\?/);
+  assert.match(source,/"change_context",\{[\s\S]*?conversationId:canvasAgent\.currentConversation\?\.id\|\|""/);
   assert.match(source,/sessionReady:false/);
   assert.match(source,/sessionEngine = String\(saved\.engine \|\| ""\)/);
   assert.match(source,/canvasAgent\.sessionReady = true/);
@@ -2895,7 +2929,8 @@ test("PenEcho Agent UI and browser Facade support local and Cloud runtimes and a
   assert.match(functionSource(source,"canvasAgentInitialTurnState"),/canvasAgentDigest\("objects"\)[\s\S]*?canvasAgentDigestHasContent[\s\S]*?empty:true[\s\S]*?target:"canvas",quality:"basic",coordinates:"none"[\s\S]*?capture\.revision!==digest\.revision/);
   assert.match(runtime,/initialCanvasState is authoritative[\s\S]*empty:true[\s\S]*no image[\s\S]*skip initial inspect\/capture/);
   assert.match(runtime,/async function admitInitialCanvasState[\s\S]*rememberCapture[\s\S]*markCanvasLayoutOverview/);
-  assert.match(source,/canvasAgentTranscript\.addEventListener\("wheel"[\s\S]*?followLatest = false/);
+  assert.doesNotMatch(source,/canvasAgentTranscript\.addEventListener\("wheel"[\s\S]*?followLatest = false/);
+  assert.match(source,/CANVAS_AGENT_FOLLOW_LATEST_PX = 48/);
   assert.match(html,/id="canvasAgentInkCanvas" width="1200" height="1040"/);
   assert.match(functionSource(source,"canvasAgentSetInputMode"),/canvasAgentForm\.classList\.toggle\("canvas-agent-ink-expanded",ink\)/);
   const prepareInk=functionSource(source,"canvasAgentPrepareInkAttachment");

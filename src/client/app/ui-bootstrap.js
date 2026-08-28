@@ -580,7 +580,10 @@
     const eraserMode = ["eraser", "area-eraser"].includes(mode),
       button = eraserMode ? eraserToolButton : document.querySelector(`[data-mode="${mode}"]`);
     if (!button) return;
-    if (eraserMode) state.eraserMode = mode;
+    if (eraserMode) {
+      state.eraserMode = mode;
+      localStorage.setItem(ERASER_MODE_STORAGE_KEY, mode);
+    }
     if (state.areaEraseGesture) cancelAreaEraseGesture();
     hideEraserToolMenu();
     const finalizingPendingWidgetForEraser = eraserMode && ["hand", "pen"].includes(state.mode)

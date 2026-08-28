@@ -112,6 +112,15 @@ test("Remote Canvas executor keeps the local session private and returns bounded
   assert.equal(captured.options.headers["content-type"], "application/json");
   assert.equal(captured.options.body, JSON.stringify(shareBody));
 
+  const connectionId = "123e4567-e89b-42d3-a456-426614174080", metadataBody = { kind:"canvas", preview:{ contentType:"image/webp", dataBase64:"AA==" } };
+  await execute({ operation:"canvas.http", request:{ method:"POST", path:"/api/community/metadata", body:metadataBody, connectionId } }, 20_000);
+  assert.equal(captured.url, "http://127.0.0.1:3888/api/community/metadata");
+  assert.equal(captured.options.headers["x-penecho-connection"], connectionId);
+  await execute({ operation:"canvas.http", request:{ method:"POST", path:"/api/community/metadata", body:metadataBody, connectionId:"not-a-connection" } }, 20_000);
+  assert.equal(captured.options.headers["x-penecho-connection"], undefined);
+  await execute({ operation:"canvas.http", request:{ method:"POST", path:"/api/cloud/community/share", body:shareBody, connectionId } }, 20_000);
+  assert.equal(captured.options.headers["x-penecho-connection"], undefined);
+
   const connectionBody = { action:"save", connection:{ provider:"codex-cli", cliPath:"codex", effort:"medium" } };
   await execute({ operation:"canvas.http", request:{ method:"POST", path:"/api/settings/connections", body:connectionBody } }, 20_000);
   assert.equal(captured.url, "http://127.0.0.1:3888/api/settings/connections");

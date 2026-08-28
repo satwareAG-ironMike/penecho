@@ -167,6 +167,7 @@
     settingsEffortToggle = document.querySelector("#settingsEffortToggle"),
     settingsEffortOptions = document.querySelector("#settingsEffortOptions"),
     settingsMaxTokens = document.querySelector("#settingsMaxTokens"),
+    settingsAgentTurnLimit = document.querySelector("#settingsAgentTurnLimit"),
     settingsTimeout = document.querySelector("#settingsTimeout"),
     settingsAutoDelay = document.querySelector("#settingsAutoDelay"),
     settingsImageFormat = document.querySelector("#settingsImageFormat"),
@@ -454,9 +455,12 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       changelogDialog: "PenEcho release notes",
       changelogClose: "Close release notes",
       changelogBadge: "What's new",
-      changelogTitle: "Visual productivity with PenEcho Agent",
+      changelogTitle: "PenEcho Agent, built for longer work",
       changelogCanvasAgentResearch: "Turn folders, files, web research, and canvas context into structured visual work from the PenEcho Agent below the canvas.",
       changelogCanvasAgentWorkspace: "Visual Explorer brings research, analysis, planning, and editable on-canvas delivery into one workflow—with less tool switching and rework.",
+      changelogAgentContinuity: "Keep the same conversation when projects, search, or model connections change, and continue after an inactivity timeout or request-round limit with completed work preserved.",
+      changelogAgentMath: "Read larger file sections with explicit continuation and see inline or display TeX rendered clearly in Agent summaries.",
+      changelogEraserMemory: "PenEcho remembers whether you last chose the eraser or area eraser across canvases and reloads.",
       settingsTitle: "Settings",
       settingsClose: "Close settings",
       settingsApiSection: "AI connection",
@@ -592,7 +596,11 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       settingsEffort: "Reasoning",
       settingsMaxTokens: "Maximum response tokens",
       settingsMaxTokensHelp: "Includes thinking tokens. Default 20,000; must be larger than 15,000. Low limits may be exhausted during reasoning.",
-      settingsTimeout: "Timeout",
+      settingsAgentTurnLimit: "PenEcho Agent rounds per request",
+      settingsAgentTurnLimitUnit: "rounds",
+      settingsAgentTurnLimitHelp: "Stops only the current request at the limit. Results and conversation stay available so the next message can continue. Default 100.",
+      settingsTimeout: "No-activity timeout",
+      settingsTimeoutHelp: "Resets when model output, tool activity, or progress arrives. There is no fixed total-time limit.",
       settingsAutoDelay: "Auto AI delay",
       settingsImageFormat: "Canvas image",
       settingsTraceLimit: "Keep request traces",
@@ -1245,6 +1253,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     }));
   }
   const initialPlugins = storedPluginSettings();
+  const ERASER_MODE_STORAGE_KEY = "penecho-eraser-mode";
   const storedPrimaryLanguage = localStorage.getItem("penecho-language"),
     storedLegacyLanguage = localStorage.getItem("ghostboard-language"),
     storedTheme = localStorage.getItem("penecho-theme") || localStorage.getItem("ghostboard-theme"),
@@ -1256,6 +1265,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     storedCanvasAgentAutoOpen = localStorage.getItem("penecho-canvas-agent-auto-open"),
     storedWidgetShadowEnabled = localStorage.getItem("penecho-widget-shadow"),
     storedSnapshotLocation = localStorage.getItem("penecho-snapshot-location"),
+    storedEraserMode = localStorage.getItem(ERASER_MODE_STORAGE_KEY),
     storedAiEffortText = String(localStorage.getItem("penecho-ai-effort") || "").trim().toLowerCase(),
     storedAiEffort = storedAiEffortText === "xhigh" ? "max" : storedAiEffortText,
     storedAutoDelay = storedAutoDelayText === null ? NaN : Number(storedAutoDelayText),
@@ -1276,6 +1286,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       ? configuredCanvasAgentAutoOpen
       : storedCanvasAgentAutoOpen === null ? configuredCanvasAgentAutoOpen !== false : storedCanvasAgentAutoOpen === "true",
     initialWidgetShadowEnabled = storedWidgetShadowEnabled === "true",
+    initialEraserMode = ["eraser", "area-eraser"].includes(storedEraserMode) ? storedEraserMode : "eraser",
     // The public viewer shares the Cloud origin (and therefore localStorage)
     // with editable Cloud Canvases. Never inherit their last-selected Cloud
     // history location: the read-only shell has no /api/cloud/library route.
@@ -1319,7 +1330,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
   const tiles = new Map(),
     state = {
       mode: "pen",
-      eraserMode: "eraser",
+      eraserMode: initialEraserMode,
       scale: 0.1,
       panX: 0,
       panY: 0,
@@ -1484,7 +1495,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
   const AI_SUPERSEDED = "AI_SUPERSEDED";
   const FEATURE_TOUR_STORAGE_KEY = "penecho-tour-progress";
   const CHANGELOG_STORAGE_KEY = "penecho-changelog-seen";
-  const CHANGELOG_VERSION = "1.1.4";
+  const CHANGELOG_VERSION = "1.1.5";
   // Keep seen IDs stable. Add a new ID (or bump its -vN suffix) to show only that feature to returning users.
   const FEATURE_TOUR_STEPS = Object.freeze([
     { id: "core-effort-v1", targets: ["#aiEffortButton"], titleKey: "tourEffortTitle", bodyKey: "tourEffortBody", placement: "bottom", radius: 8 },
@@ -2777,6 +2788,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       settingsEffort.value = body.effort || defaultConnectionEffort(body.provider);
       updateSettingsEffortOptions();
       settingsMaxTokens.value = String(body.maxTokens);
+      settingsAgentTurnLimit.value = String(body.canvasAgentTurnLimit);
       settingsTimeout.value = String(body.timeoutSeconds);
       settingsAutoDelay.value = String(body.autoDelaySeconds);
       settingsImageFormat.value = body.imageFormat;
@@ -2803,7 +2815,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
         scope, deepSeekSearchProvider:settingsDeepSeekSearchProvider.value, deepseekSearchApiKey:settingsDeepSeekSearchApiKey.value, tavilyApiKey:settingsTavilyApiKey.value,
       } : {
         scope, provider, apiFormat:apiPreset?.format || settingsApiFormat.value, apiPreset:apiPreset ? `${apiPreset.family}-${apiPreset.region}-${apiPreset.service}` : "", apiUrl:settingsApiUrl.value, apiModel:settingsApiModel.value,
-        apiKey:settingsApiKey.value, effort:settingsEffort.value, maxTokens:Number(settingsMaxTokens.value), timeoutSeconds:Number(settingsTimeout.value),
+        apiKey:settingsApiKey.value, effort:settingsEffort.value, maxTokens:Number(settingsMaxTokens.value), canvasAgentTurnLimit:Number(settingsAgentTurnLimit.value), timeoutSeconds:Number(settingsTimeout.value),
         autoDelaySeconds:Number(settingsAutoDelay.value), imageFormat:settingsImageFormat.value,
         requestTrace:settings.requestTrace, requestTraceLimit:Number(settingsTraceLimit.value),
       };
@@ -3198,7 +3210,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       if (state.pendingWidget && pluginEnabled(state.pendingWidget.pluginId)) mountWidget(state.pendingWidget);
       persistPluginSettings();
       requestRender();
-      if(catalogWasLoaded)canvasAgentConnectionDidChange(true);
+      if(catalogWasLoaded)canvasAgentContextDidChange(true);
       loadSucceeded=true;
       return true;
     } catch (error) {
@@ -3803,7 +3815,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     if (plugin.documentPath) applyWidgetPluginState(pluginId, state.plugins[pluginId]);
     else plugin.onChange?.(state.plugins[pluginId]);
     updatePluginControl();
-    if (pluginId === "flowchart" || plugin.builtIn === false) canvasAgentConnectionDidChange(true);
+    if (pluginId === "flowchart" || plugin.builtIn === false) canvasAgentContextDidChange(true);
     return true;
   }
   function setEffort(value) {

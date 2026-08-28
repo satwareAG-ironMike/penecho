@@ -9,6 +9,13 @@ const PROJECT_ID = "project-[a-zA-Z0-9-]{8,64}";
 const CANVAS_AGENT_PROJECT_ID = "(?:local|file)-[0-9a-f]{24}";
 const CANVAS_AGENT_ROOT_ID = "root-[0-9a-f]{24}";
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
+const LOCAL_CONNECTION_ID_PATTERN = new RegExp(`^${UUID}$`, "i");
+
+function remoteCanvasConnectionId(target, value) {
+  if (target !== "/api/community/metadata") return null;
+  const connectionId = typeof value === "string" ? value.trim() : "";
+  return LOCAL_CONNECTION_ID_PATTERN.test(connectionId) ? connectionId : null;
+}
 
 function validCanvasAgentEntriesQuery(searchParams) {
   const entries = [...searchParams.entries()];
@@ -96,6 +103,7 @@ function createRemoteCanvasHttpExecutor({ origin, sessionCookie, fetchImpl = glo
     if (!input || input.operation !== "canvas.http" || !input.request) throw Object.assign(new Error("Remote Canvas request is invalid."), { code:"remote_canvas_request", status:400 });
     const method = String(input.request.method || "GET").toUpperCase();
     const target = remoteCanvasTarget(method, input.request.path);
+    const connectionId = remoteCanvasConnectionId(target, input.request.connectionId);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), Math.max(10_000, Math.min(Number(timeoutMs) || 210_000, 240_000)));
     try {
@@ -109,6 +117,7 @@ function createRemoteCanvasHttpExecutor({ origin, sessionCookie, fetchImpl = glo
           origin:localOrigin.origin,
           cookie,
           ...(hasBody ? { "content-type":"application/json" } : {}),
+          ...(connectionId ? { "x-penecho-connection":connectionId } : {}),
         },
         body:hasBody ? JSON.stringify(input.request.body) : undefined,
       });

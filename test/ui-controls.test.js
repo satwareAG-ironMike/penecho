@@ -411,10 +411,18 @@ test("switching from Pen to Eraser finalizes a pending widget regardless of revi
       areaEraseGesture:null,
       eraserMode:"eraser",
       busy:false,
-    };
-  let accepted = 0;
-  vm.runInNewContext(`(${setCanvasMode})("eraser")`, {
+  };
+  let accepted = 0,
+    storedEraserMode = null;
+  vm.runInNewContext(`(${setCanvasMode})("area-eraser")`, {
     state,
+    ERASER_MODE_STORAGE_KEY:"penecho-eraser-mode",
+    localStorage:{
+      setItem:(key, value) => {
+        assert.equal(key, "penecho-eraser-mode");
+        storedEraserMode = value;
+      },
+    },
     eraserToolButton:button,
     document:{
       querySelector:() => button,
@@ -438,7 +446,8 @@ test("switching from Pen to Eraser finalizes a pending widget regardless of revi
     requestInteractionLayerRender() {},
   });
   assert.equal(accepted, 1);
-  assert.equal(state.mode, "eraser");
+  assert.equal(state.mode, "area-eraser");
+  assert.equal(storedEraserMode, "area-eraser");
   assert.equal(state.pendingWidget, null);
 });
 
@@ -560,6 +569,8 @@ test("clicking eraser switches its current mode and shows two auto-closing choic
     erase = functionSource(app, "eraseInkRegion"),
     clearDirty = functionSource(app, "clearDirtyInkRegion"),
     draw = functionSource(app, "drawAreaEraseSelection"),
+    startBlankCanvas = functionSource(app, "startBlankCanvas"),
+    loadSnapshot = functionSource(app, "loadSnapshot"),
     box = vm.runInNewContext(`(${functionSource(app, "areaEraseBox")})`, { state:{ areaEraseGesture:null } });
 
   assert.match(html, /id="eraserToolBtn"[^>]*data-mode="eraser"[^>]*aria-haspopup="menu"[^>]*aria-controls="eraserToolMenu"/);
@@ -570,6 +581,11 @@ test("clicking eraser switches its current mode and shows two auto-closing choic
   assert.match(css, /data-active-eraser="eraser"\][^\{]*data-eraser-icon="freehand"[\s\S]*?data-active-eraser="area-eraser"\][^\{]*data-eraser-icon="area"[^\{]*\{\s*display:\s*block/);
   assert.match(functionSource(app, "updateEraserToolUI"), /dataset\.activeEraser = state\.eraserMode/);
   assert.doesNotMatch(functionSource(app, "updateEraserToolUI"), /toggleAttribute\("hidden"/);
+  assert.match(app, /ERASER_MODE_STORAGE_KEY = "penecho-eraser-mode"[\s\S]*?storedEraserMode = localStorage\.getItem\(ERASER_MODE_STORAGE_KEY\)/);
+  assert.match(app, /initialEraserMode = \["eraser", "area-eraser"\]\.includes\(storedEraserMode\) \? storedEraserMode : "eraser"[\s\S]*?eraserMode: initialEraserMode/);
+  assert.match(functionSource(app, "setCanvasMode"), /state\.eraserMode = mode;[\s\S]*?localStorage\.setItem\(ERASER_MODE_STORAGE_KEY, mode\)/);
+  assert.doesNotMatch(startBlankCanvas, /eraserMode|ERASER_MODE_STORAGE_KEY/);
+  assert.doesNotMatch(loadSnapshot, /eraserMode|ERASER_MODE_STORAGE_KEY/);
   assert.match(css, /\.eraser-tool-menu\s*\{[^}]*top:\s*calc\(100% \+ 6px\)[^}]*display:\s*flex/);
   assert.match(css, /\.eraser-tool-option\[aria-checked="true"\]\s*\{[^}]*color:/);
   assert.match(app, /ERASER_TOOL_MENU_MS = 5000/);

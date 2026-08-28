@@ -117,13 +117,17 @@ npm start
 - **已连接设备（Linked device）。** 用云端 → 设备生成的一次性密钥配对这台主机后，你已登录的浏览器和应用就能通过云端中继从任何地方访问它。无需把主机暴露到公网即可远程访问画布；API 凭据仍然只保存在这台设备上。链接随时可以暂停、恢复或移除。
 - **Echoes：共同创作与知识分享。** 在 12 个分类下浏览公开画布和组件，收藏到通过云端同步的个人收藏夹，并把社区组件直接加入自己的画布。你也可以为自己的画布选择分享分类并公开发布，让其他人学习、在其基础上 Echo — 作品谱系（Craft lineage）会在版本之间保留。
 
-## 🔔 1.1.4 新功能
+## 🔔 1.1.5 新功能
 
 - **PenEcho Agent。** 从画布下方开始，在同一条多步骤工作流中连续处理本地文件、只读文件夹项目、网络研究、画布上下文、视觉创作和直接编辑。
 - **Visual Explorer。** 把研究资料、文档、笔记和规划转化为从总览到细节与证据的响应式视觉成果，而不是一堆通用卡片，也不是困在聊天记录里的文字。
 - **更短的成果路径。** 在同一个工作区中完成研究、分析、结构化、可视化、检查和修改；结果直接保留为画布上的可编辑内容，减少上下文切换、复制粘贴、手工绘图和返工。
 - **渐进式视觉交付。** PenEcho Agent 可以边工作边放置并检查完整的 Visual Explorer 版本，更早交付可用结果，并在原位继续完善，无需每次从头生成。
-- **更完整的工作上下文。** 添加 PDF、Word、PowerPoint、Excel、图片、代码或只读文件夹项目，引用已有 Widget 与手写内容，并在可用时使用联网搜索。
+- **更完整的工作上下文。** 添加 PDF、Word、PowerPoint、Excel、图片、代码或只读文件夹项目，引用已有 Widget 与手写内容，在可用时使用联网搜索，并通过明确的续读位置处理大段文本和文档附件。
+- **Agent 会话连续性。** 切换项目、联网搜索上下文、模型连接或画布能力时，不会丢失当前会话和已粘贴的草稿文件。单次请求达到无活动超时或轮次上限后，已完成结果仍会保留，下一条消息可在同一会话继续。
+- **长任务与明确上限。** 模型超时现在是会随输出和工具进度重新计时的无活动截止时间，不再是固定总时长。单次 PenEcho Agent 请求可设置 50–500 轮，默认为 100 轮。
+- **Agent 回复中的数学公式。** 最终总结中的行内和独立 TeX 公式会排版为无障碍数学内容；无法排版时安全保留原始公式。
+- **记住橡皮擦选择。** PenEcho 会在切换画布和重新加载后保留上次选择的橡皮擦或范围橡皮擦模式。
 
 1.0.0 推出了 [PenEcho 云端](https://penecho.ai)、私有版本化项目、已连接设备远程访问、Echoes、公开作品和同步收藏。0.9.0 带来了多套 AI 连接与一键切换、按项目管理的共享画布、有明确目标的原地完善、基于 unified diff 的增量修改、SSE 流式请求以及清晰的请求进度与取消。完整历史请查看 [Releases](https://github.com/penecho/penecho/releases)。
 
@@ -135,13 +139,15 @@ npm start
 
 ## ⚙️ 配置
 
-`penecho configure` 会打开交互式配置中心，涵盖 LLM 来源、模型、推理等级、超时、响应 token 上限、图片格式、请求记录和监听地址端口。最常用的设置（也可直接写在 `~/.penecho/config.env`）：
+`penecho configure` 会打开交互式配置中心，涵盖 LLM 来源、模型、推理等级、无活动超时、单次 Agent 请求轮次上限、响应 token 上限、图片格式、请求记录和监听地址端口。最常用的设置（也可直接写在 `~/.penecho/config.env`）：
 
 | 设置 | 用途 |
 | --- | --- |
 | `AI_PROVIDER` | 执行器：`api`、`kimi-cli`、`codex-cli` 或 `claude-cli` |
 | `AI_API_URL` / `AI_API_KEY` / `AI_API_MODEL` | API 端点、凭据和模型（仅 API 模式） |
 | `AI_EFFORT` | 保存的推理等级；画布工具栏的 `Reasoning` 菜单可按请求覆盖，不会改写连接配置 |
+| `AI_TIMEOUT_SECONDS` | PenEcho Agent 的无活动截止时间；模型输出或工具真实进度会重新计时 |
+| `PENECHO_CANVAS_AGENT_TURN_LIMIT` | 单次请求允许 50–500 轮，默认 100；达到上限时保留结果和会话 |
 | `HOST` / `PORT` | 监听地址和端口，默认 `0.0.0.0:3888` |
 | `AUTO_AI_DELAY_SECONDS` | 自动识别前的延迟，可在画布上调整 0–10 秒 |
 
@@ -154,22 +160,13 @@ npm start
 - 如需公网访问，请将 PenEcho 部署在具备 HTTPS、更强身份验证、频率限制和请求大小限制的反向代理之后。
 - 凭据只保存在 Node.js 进程和配置文件中，不会发送到浏览器代码。不要公开配置文件、日志、截图或包含隐私内容的请求记录。
 
-## 🗺️ 路线图
-
-- [x] 多套 AI 连接与一键切换（0.9.0）
-- [x] 按项目管理的共享画布与版本化 Bundle（0.9.0）
-- [ ] 更好的手写识别
-- [ ] 更广的模型覆盖 — Google/Gemini 尚未测试，特别欢迎测试反馈
-- [ ] 更自然的笔交互与更多画布视觉工具
-- [ ] 更多 UI 语言 — 目前支持英文和中文
-
 ## ❓ 常见问题
 
 **必须有 API Key 吗？**
 不是。已登录的 [Kimi Code CLI](https://github.com/MoonshotAI/kimi-code)、[Codex CLI](https://developers.openai.com/codex/cli) 或 [Claude Code CLI](https://code.claude.com/docs/en/overview) 都可以 — PenEcho 在本地调用所选 CLI，该来源不需要 API Key。
 
 **应该从哪个模型开始？**
-[Kimi K3](https://platform.kimi.ai?aff=penecho)、Claude Opus 4.8 / 5.0 和 `gpt-5.6` 系列都是不错的起点，详见[英文 README 的模型推荐](../../README.md#recommended-model-configurations)。
+[Kimi K3](https://platform.kimi.ai?aff=penecho)、Claude Opus 4.8 / 5.0、`gpt-5.6` 系列、`deepseek-v4-flash-vision-exp` 和 `glm-5.3-flash` 都是已测试的起点，详见[英文 README 的模型推荐](../../README.md#recommended-model-configurations)。
 
 **PenEcho 免费吗？**
 应用本身采用 AGPL v3 开源、免费使用。模型用量由你的服务商计费，或包含在你登录的 Codex/Claude 订阅中。典型的低推理等级请求每次只要几美分。

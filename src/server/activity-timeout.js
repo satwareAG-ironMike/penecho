@@ -74,4 +74,38 @@ function createIdleAndTotalTimeout(controller, idleTimeoutMs, totalTimeoutMs, op
   };
 }
 
-module.exports = { createActivityAwareTimeout, createIdleAndTotalTimeout, STREAM_IDLE_GRACE_MS };
+function createInactivityTimeout(controller, idleTimeoutMs, options = {}) {
+  const idleLimitMs = Math.max(1, Number(idleTimeoutMs) || 1),
+    now = options.now || Date.now,
+    scheduleTimer = options.setTimeout || setTimeout,
+    cancelTimer = options.clearTimeout || clearTimeout,
+    reasonFor = typeof options.reasonFor === "function" ? options.reasonFor : () => undefined;
+  let lastActivityAt = now(), timer = null, cleared = false;
+
+  const schedule = () => {
+    if (timer !== null) cancelTimer(timer);
+    const remaining = Math.max(1, idleLimitMs - (now() - lastActivityAt));
+    timer = scheduleTimer(() => {
+      if (cleared || controller.signal.aborted) return;
+      const nextRemaining = idleLimitMs - (now() - lastActivityAt);
+      if (nextRemaining > 0) return schedule();
+      controller.abort(reasonFor("idle", idleLimitMs));
+    }, remaining);
+  };
+
+  schedule();
+  return {
+    activity() {
+      if (cleared || controller.signal.aborted) return;
+      lastActivityAt = now();
+      schedule();
+    },
+    clear() {
+      cleared = true;
+      if (timer !== null) cancelTimer(timer);
+      timer = null;
+    },
+  };
+}
+
+module.exports = { createActivityAwareTimeout, createIdleAndTotalTimeout, createInactivityTimeout, STREAM_IDLE_GRACE_MS };

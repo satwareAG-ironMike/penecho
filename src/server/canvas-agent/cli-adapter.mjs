@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { CallId, LlmAdapter, LlmError, resolveRetryPolicy } from '@deepseek-ai/dsh-llm'
-import { DEFAULT_CANVAS_AGENT_IDLE_TIMEOUT_MS, canvasAgentTimeoutLimits, canvasAgentTimeoutSeconds, createCanvasAgentModelTimeout } from './model-timeout.mjs'
+import { DEFAULT_CANVAS_AGENT_IDLE_TIMEOUT_MS, canvasAgentTimeoutSeconds, createCanvasAgentModelTimeout } from './model-timeout.mjs'
 
 const require = createRequire(import.meta.url)
 const { callKimiCanvasAgentCli } = require('../../providers/kimi-cli.js')
@@ -234,10 +234,6 @@ export function normalizeCliTokenUsage(value) {
   }
 }
 
-export function cliTotalTimeoutMs(idleTimeoutMs) {
-  return canvasAgentTimeoutLimits(idleTimeoutMs).totalTimeoutMs
-}
-
 export async function callPenEchoCli({ connection, systemPrompt, prompt, atlasImage, signal, onActivity = null, onUsage = null }) {
   const request = {
     executable:connection.cliPath,
@@ -336,9 +332,7 @@ export class PenEchoCliAdapter extends LlmAdapter {
     options.signal?.throwIfAborted()
     const controller = new AbortController(),
       timeout = createCanvasAgentModelTimeout(controller, this.timeoutMs(connection.id), {
-        reasonFor:(kind, limitMs)=>Object.assign(new Error(kind === 'idle'
-          ? `PenEcho Agent CLI request timed out after ${canvasAgentTimeoutSeconds(limitMs)} seconds without output activity.`
-          : `PenEcho Agent CLI request timed out after reaching the ${canvasAgentTimeoutSeconds(limitMs)}-second total limit.`), { name:'TimeoutError' }),
+        reasonFor:(_kind, limitMs)=>Object.assign(new Error(`PenEcho Agent CLI request timed out after ${canvasAgentTimeoutSeconds(limitMs)} seconds without output activity. The conversation is preserved; send another message to continue.`), { name:'TimeoutError' }),
       }),
       signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal
     try {

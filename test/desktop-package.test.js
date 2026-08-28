@@ -22,7 +22,7 @@ const ROOT = path.resolve(__dirname, "..");
 function base(overrides = {}) {
   return {
     provider:"api", apiFormat:"openai", apiUrl:"https://api.openai.com/v1", apiModel:"gpt-5.6-sol", apiKey:"secret",
-    effort:"medium", imageFormat:"webp", timeout:"180", autoDelay:"1.2", host:"127.0.0.1", port:"3888",
+    effort:"medium", imageFormat:"webp", timeout:"180", canvasAgentTurnLimit:"100", autoDelay:"1.2", host:"127.0.0.1", port:"3888",
     requestTrace:false, traceLimit:"100", ...overrides,
   };
 }
@@ -38,6 +38,9 @@ test("desktop settings accept a secure API configuration and reject unsafe value
   assert.throws(() => normalizeSettings(base({ apiUrl:"https://user:pass@example.com" })), /without embedded credentials/);
   assert.throws(() => normalizeSettings(base({ host:"192.168.1.2" })), /local-only or LAN/);
   assert.equal(normalizeSettings(base({ effort:"" })).updates.AI_EFFORT, "medium");
+  assert.equal(normalized.updates.PENECHO_CANVAS_AGENT_TURN_LIMIT,"100");
+  assert.throws(() => normalizeSettings(base({ canvasAgentTurnLimit:"49" })),/50 to 500/);
+  assert.throws(() => normalizeSettings(base({ canvasAgentTurnLimit:"501" })),/50 to 500/);
 });
 
 test("desktop settings support CLI providers without exposing API secrets", () => {
@@ -54,6 +57,8 @@ test("desktop settings support CLI providers without exposing API secrets", () =
   assert.equal(publicSettings({ env:{} }).host, "0.0.0.0");
   assert.equal(publicSettings({ env:{} }).autoDelay, "5");
   assert.equal(publicSettings({ env:{} }).canvasAgentAutoOpen, true);
+  assert.equal(publicSettings({ env:{} }).canvasAgentTurnLimit,"100");
+  assert.equal(publicSettings({ env:{ PENECHO_CANVAS_AGENT_TURN_LIMIT:"275" } }).canvasAgentTurnLimit,"275");
   assert.equal(publicSettings({ env:{ PENECHO_CANVAS_AGENT_AUTO_OPEN:"false" } }).canvasAgentAutoOpen, false);
   assert.equal(normalizeSettings(base({ autoDelay:undefined })).updates.AUTO_AI_DELAY_SECONDS, "5");
   assert.equal(normalizeSettings(base({ canvasAgentAutoOpen:false })).updates.PENECHO_CANVAS_AGENT_AUTO_OPEN, "false");
@@ -381,8 +386,8 @@ test("desktop shell and Forge config keep the renderer isolated and package nati
   assert.match(otherGroup, /value="codex-cli"/);
   assert.match(otherGroup, /value="claude-cli"/);
   assert.ok(html.indexOf("kimi-provider-group") < html.indexOf("otherProviderGroupTitle"));
-  assert.equal(rootPackage.version, "1.1.4");
-  assert.equal(rootPackage.config.desktopVersion, "1.1.4");
+  assert.equal(rootPackage.version, "1.1.5");
+  assert.equal(rootPackage.config.desktopVersion, "1.1.5");
   assert.match(html, /data-install-cli="kimi-cli"/);
   assert.match(html, /github\.com\/MoonshotAI\/kimi-code/);
   assert.match(html, /data-i18n="installGuide">Guide<\/a>/);

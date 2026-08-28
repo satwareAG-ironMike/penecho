@@ -24,21 +24,21 @@ function functionSource(name){
   assert.fail(`unterminated function ${name}`);
 }
 
-function renderer(document){
-  const names=["canvasAgentFencedSegments","canvasAgentBlockLabel","canvasAgentMarkdownHref","canvasAgentAppendMarkdownStyled","canvasAgentAppendMarkdownLinks","canvasAgentAppendMarkdownInline","canvasAgentMarkdownSafe","canvasAgentAppendMarkdown","canvasAgentRenderMessageBody"];
+function renderer(document,MathJax){
+  const names=["canvasAgentFencedSegments","canvasAgentBlockLabel","canvasAgentMarkdownHref","canvasAgentDisplayMathSegments","canvasAgentSafeMathJaxNode","canvasAgentMarkdownMathNode","canvasAgentAppendMarkdownStyled","canvasAgentAppendMarkdownLinks","canvasAgentAppendMarkdownInline","canvasAgentMarkdownSafe","canvasAgentAppendMarkdown","canvasAgentRenderMessageBody"];
   return vm.runInNewContext(`(()=>{${names.map(functionSource).join("\n")}return canvasAgentRenderMessageBody;})()`,{
-    document,URL,MIXED_TEXT,CANVAS_AGENT_MARKDOWN_TEXT_LIMIT:12000,CANVAS_AGENT_MARKDOWN_LINE_LIMIT:240,CANVAS_AGENT_MARKDOWN_MARKER_LIMIT:800,CANVAS_AGENT_MARKDOWN_BACKSLASH_LIMIT:256,CANVAS_AGENT_MARKDOWN_SEGMENT_LIMIT:48,
+    document,URL,MIXED_TEXT,MathJax,CANVAS_AGENT_MARKDOWN_TEXT_LIMIT:12000,CANVAS_AGENT_MARKDOWN_LINE_LIMIT:240,CANVAS_AGENT_MARKDOWN_MARKER_LIMIT:800,CANVAS_AGENT_MARKDOWN_BACKSLASH_LIMIT:256,CANVAS_AGENT_MARKDOWN_SEGMENT_LIMIT:48,CANVAS_AGENT_MARKDOWN_MATH_COUNT_LIMIT:64,CANVAS_AGENT_MARKDOWN_MATH_SOURCE_LIMIT:4000,
     t:key=>({canvasAgentCodeBlock:"Code",canvasAgentTextBlock:"Text",canvasAgentCopyBlock:"Copy",canvasAgentBlockCopied:"Copied",canvasAgentBlockCopyFailed:"Copy failed"})[key]||key,
     writeClipboardText:async()=>true,setTimeout,
   });
 }
 
 function messageAppender(document,clipboardWrites){
-  const names=["canvasAgentFencedSegments","canvasAgentBlockLabel","canvasAgentMarkdownHref","canvasAgentAppendMarkdownStyled","canvasAgentAppendMarkdownLinks","canvasAgentAppendMarkdownInline","canvasAgentMarkdownSafe","canvasAgentAppendMarkdown","canvasAgentRenderMessageBody","canvasAgentSetAssistantCopyState","canvasAgentCopyAssistantMessage","canvasAgentSetAssistantCopyReady","canvasAgentAssistantPosition","canvasAgentAppendMessageElement"];
+  const names=["canvasAgentFencedSegments","canvasAgentBlockLabel","canvasAgentMarkdownHref","canvasAgentDisplayMathSegments","canvasAgentSafeMathJaxNode","canvasAgentMarkdownMathNode","canvasAgentAppendMarkdownStyled","canvasAgentAppendMarkdownLinks","canvasAgentAppendMarkdownInline","canvasAgentMarkdownSafe","canvasAgentAppendMarkdown","canvasAgentRenderMessageBody","canvasAgentSetAssistantCopyState","canvasAgentCopyAssistantMessage","canvasAgentSetAssistantCopyReady","canvasAgentAssistantPosition","canvasAgentAppendMessageElement"];
   const translations={canvasAgentCodeBlock:"Code",canvasAgentTextBlock:"Text",canvasAgentCopyBlock:"Copy",canvasAgentBlockCopied:"Copied",canvasAgentBlockCopyFailed:"Copy failed",canvasAgentCopyResponse:"Copy response",canvasAgentResponseCopied:"Copied",canvasAgentResponseCopyFailed:"Copy failed",canvasAgentHistoryAttachments:"{count} attachments"};
   const canvasAgentTranscript=document.querySelector("#transcript");
   return vm.runInNewContext(`(()=>{${names.map(functionSource).join("\n")}return {append:canvasAgentAppendMessageElement,copy:canvasAgentCopyAssistantMessage};})()`,{
-    document,URL,MIXED_TEXT,canvasAgentTranscript,CANVAS_AGENT_MARKDOWN_TEXT_LIMIT:12000,CANVAS_AGENT_MARKDOWN_LINE_LIMIT:240,CANVAS_AGENT_MARKDOWN_MARKER_LIMIT:800,CANVAS_AGENT_MARKDOWN_BACKSLASH_LIMIT:256,CANVAS_AGENT_MARKDOWN_SEGMENT_LIMIT:48,
+    document,URL,MIXED_TEXT,canvasAgentTranscript,CANVAS_AGENT_MARKDOWN_TEXT_LIMIT:12000,CANVAS_AGENT_MARKDOWN_LINE_LIMIT:240,CANVAS_AGENT_MARKDOWN_MARKER_LIMIT:800,CANVAS_AGENT_MARKDOWN_BACKSLASH_LIMIT:256,CANVAS_AGENT_MARKDOWN_SEGMENT_LIMIT:48,CANVAS_AGENT_MARKDOWN_MATH_COUNT_LIMIT:64,CANVAS_AGENT_MARKDOWN_MATH_SOURCE_LIMIT:4000,
     t:key=>translations[key]||key,
     writeClipboardText:async value=>{clipboardWrites.push(String(value));return true;},
     setTimeout:()=>0,clearTimeout:()=>{},
@@ -68,6 +68,54 @@ test("PenEcho Agent final messages render safe compact Markdown while user and s
   render(body,"**user text**","user");
   assert.equal(body.textContent,"**user text**");
   assert.equal(body.querySelector("strong"),null);
+});
+
+test("PenEcho Agent renders inline and multiline display TeX in final summaries",async()=>{
+  const {document}=parseHTML("<!doctype html><html><body><div id=body></div></body></html>"),body=document.querySelector("#body"),calls=[],MathJax={
+    async tex2svgPromise(tex,options){
+      calls.push({tex,options});
+      const container=document.createElement("mjx-container"),svg=document.createElement("svg");
+      svg.append(document.createElement("path"));container.append(svg);return container;
+    },
+  },render=renderer(document,MathJax);
+  render(body,"- Odd degree for \\(C^0\\) embeddings.\n\n\\[\nH^4(W,\\partial W;\\mathbb Z)\\cong \\mathbb Z/2,\n\\qquad e(E,n_\\partial)=\\kappa(\\gamma,r)\\bmod 2.\n\\]","assistant");
+  await new Promise(resolve=>setImmediate(resolve));
+  const math=[...body.querySelectorAll(".canvas-agent-markdown-math")];
+  assert.equal(math.length,2);
+  assert.equal(math[0].classList.contains("is-inline"),true);
+  assert.equal(math[1].classList.contains("is-display"),true);
+  assert.equal(math.every(node=>node.classList.contains("is-rendered")),true);
+  assert.equal(math.every(node=>node.getAttribute("role")==="math"),true);
+  assert.deepEqual(calls.map(call=>call.options.display),[false,true]);
+  assert.match(calls[1].tex,/H\^4\(W,\\partial W;\\mathbb Z\)\\cong/);
+});
+
+test("PenEcho Agent preserves literal TeX when MathJax output is unavailable or unsafe",async()=>{
+  const {document}=parseHTML("<!doctype html><html><body><div id=body></div></body></html>"),body=document.querySelector("#body"),unsafeMathJax={
+    async tex2svgPromise(){
+      const container=document.createElement("mjx-container"),svg=document.createElement("svg"),link=document.createElement("a");
+      link.setAttribute("href","javascript:alert(1)");svg.append(link);container.append(svg);return container;
+    },
+  },render=renderer(document,unsafeMathJax),source="Unsafe \\(x^2\\)";
+  render(body,source,"assistant");
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(body.querySelector(".canvas-agent-markdown-math")?.textContent,"\\(x^2\\)");
+  assert.equal(body.querySelector(".canvas-agent-markdown-math")?.classList.contains("is-fallback"),true);
+  assert.equal(body.querySelector("a"),null);
+});
+
+test("PenEcho Agent keeps display delimiters literal inside inline code",async()=>{
+  const {document}=parseHTML("<!doctype html><html><body><div id=body></div></body></html>"),body=document.querySelector("#body"),calls=[],MathJax={
+    async tex2svgPromise(tex){
+      calls.push(tex);
+      const container=document.createElement("mjx-container"),svg=document.createElement("svg");
+      svg.append(document.createElement("path"));container.append(svg);return container;
+    },
+  },render=renderer(document,MathJax);
+  render(body,"Keep `\\[literal\\]` and render \\(x^2\\).","assistant");
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(body.querySelector("code")?.textContent,"\\[literal\\]");
+  assert.deepEqual(calls,["x^2"]);
 });
 
 test("PenEcho Agent Markdown never executes model HTML or unsafe links and preserves fenced payloads",()=>{
@@ -105,6 +153,9 @@ test("PenEcho Agent Markdown has a bounded fallback for pathological final text"
   render(body,nodeHeavy,"assistant");
   assert.equal(body.classList.contains("is-markdown"),false,"dense inline math falls back before creating thousands of DOM nodes");
   assert.equal(body.childNodes.length,1);
+  const bareNodeHeavy=Array.from({length:65},()=>"A_x").join(" ");
+  render(body,bareNodeHeavy,"assistant");
+  assert.equal(body.classList.contains("is-markdown"),false,"bare TeX is bounded even without dense delimiter markers");
 });
 
 test("PenEcho Agent live and persisted messages share one explicit display limit",()=>{

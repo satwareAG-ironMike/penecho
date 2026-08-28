@@ -467,6 +467,7 @@ test("canvas settings expose no API secret and save validated configuration for 
     assert.equal(Object.hasOwn(current, "deepseekSearchApiKey"), false);
     assert.equal(Object.hasOwn(current, "tavilyApiKey"), false);
     assert.equal(current.maxTokens, 20000);
+    assert.equal(current.canvasAgentTurnLimit,100);
     const invalidSearchTestResponse=await fetch(`${origin}/api/settings/search/test`,{method:"POST",headers,body:JSON.stringify({deepSeekSearchProvider:"opencode-go",deepseekSearchApiKey:"bad\nkey",tavilyApiKey:""})}),invalidSearchTest=await invalidSearchTestResponse.json();
     assert.equal(invalidSearchTestResponse.status,400);
     assert.doesNotMatch(JSON.stringify(invalidSearchTest),/saved-(?:deepseek|tavily)-secret/);
@@ -498,7 +499,7 @@ test("canvas settings expose no API secret and save validated configuration for 
     assert.equal(switchedResponse.status, 200);
     const hot = await fetch(`${origin}/api/config`).then(response => response.json());
     assert.equal(hot.aiProvider, "codex-cli");
-    const systemResponse = await fetch(`${origin}/api/settings`, { method:"POST", headers, body:JSON.stringify({ ...current, scope:"system", timeoutSeconds:120, autoDelaySeconds:2.5, imageFormat:"png", requestTrace:true, requestTraceLimit:25 }) });
+    const systemResponse = await fetch(`${origin}/api/settings`, { method:"POST", headers, body:JSON.stringify({ ...current, scope:"system", timeoutSeconds:120, canvasAgentTurnLimit:250, autoDelaySeconds:2.5, imageFormat:"png", requestTrace:true, requestTraceLimit:25 }) });
     const system = await systemResponse.json();
     assert.equal(system.restartRequired, true);
     assert.equal(system.providerApplied, false);
@@ -507,8 +508,13 @@ test("canvas settings expose no API secret and save validated configuration for 
     const updatedText = await fs.promises.readFile(path.join(stateDir, "config.env"), "utf8");
     assert.match(updatedText, /^AUTO_AI_DELAY_SECONDS=2\.5$/m);
     assert.match(updatedText, /^MAX_TOKENS=20000$/m);
+    assert.match(updatedText, /^PENECHO_CANVAS_AGENT_TURN_LIMIT=250$/m);
     const invalidMaxTokens = await fetch(`${origin}/api/settings`, { method:"POST", headers, body:JSON.stringify({ ...current, scope:"system", maxTokens:14999 }) });
     assert.equal(invalidMaxTokens.status, 400);
+    const invalidLowTurnLimit = await fetch(`${origin}/api/settings`, { method:"POST", headers, body:JSON.stringify({ ...current, scope:"system", canvasAgentTurnLimit:49 }) });
+    assert.equal(invalidLowTurnLimit.status,400);
+    const invalidHighTurnLimit = await fetch(`${origin}/api/settings`, { method:"POST", headers, body:JSON.stringify({ ...current, scope:"system", canvasAgentTurnLimit:501 }) });
+    assert.equal(invalidHighTurnLimit.status,400);
     const invalid = await fetch(`${origin}/api/settings`, { method:"POST", headers, body:JSON.stringify({ ...current, scope:"api", apiKey:"", apiUrl:"file:///tmp/model", timeoutSeconds:120, autoDelaySeconds:5, imageFormat:"webp", requestTraceLimit:100 }) });
     assert.equal(invalid.status, 400);
   } finally { await stopServer(child); }

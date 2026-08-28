@@ -36,7 +36,7 @@ import {
   canvasDecisionFeedbackResult,
 } from './decision-admission.mjs'
 import PenEchoAttachmentStore, { canonicalCanvasCaptureImage } from './image-attachments.mjs'
-import { DEFAULT_CANVAS_AGENT_IDLE_TIMEOUT_MS, canvasAgentTimeoutLimits, canvasAgentTimeoutSeconds } from './model-timeout.mjs'
+import { DEFAULT_CANVAS_AGENT_IDLE_TIMEOUT_MS, canvasAgentTimeoutLimits } from './model-timeout.mjs'
 import { readPptxPresentation } from './pptx-reader.mjs'
 
 const require = createRequire(import.meta.url)
@@ -45,6 +45,7 @@ const PLUGIN_FORMAT = require('../../../public/plugins.js')
 const { DEFAULT_REASONING_EFFORT, reasoningEffortMapping } = require('../../providers/reasoning-effort.js')
 const { projectFileReader, validateProjectFileContent } = require('./project-store.js')
 const { fetchPublicResource } = require('../public-fetch.js')
+const turnLimit = require('./turn-limit.js')
 
 const SETTINGS_NS = settingsNamespace('llm-pi-ai')
 const SESSION_TTL_MS = 30_000
@@ -104,7 +105,10 @@ const VISUAL_EXPLORER_MAX_PROGRESSIVE_PATCHES_PER_USER_TURN = MAX_WIDGET_PATCH_A
 const VISUAL_EXPLORER_MAX_DETAIL_CAPTURES_PER_USER_TURN = 2
 const VISUAL_EXPLORER_MAX_PATCH_BYTES = 64 * 1024
 const VISUAL_EXPLORER_MAX_PATCH_CHANGED_LINES = 400
-export const CANVAS_AGENT_MAX_TOOL_CALLS_PER_USER_TURN = 32
+export const MIN_CANVAS_AGENT_TURN_LIMIT = turnLimit.MIN_CANVAS_AGENT_TURN_LIMIT
+export const MAX_CANVAS_AGENT_TURN_LIMIT = turnLimit.MAX_CANVAS_AGENT_TURN_LIMIT
+export const DEFAULT_CANVAS_AGENT_TURN_LIMIT = turnLimit.DEFAULT_CANVAS_AGENT_TURN_LIMIT
+export const CANVAS_AGENT_MAX_TOOL_CALLS_PER_USER_TURN = DEFAULT_CANVAS_AGENT_TURN_LIMIT
 const CONVERSATION_LOG_SECRET_KEY = /^(?:authorization|proxy-authorization|api[-_]?key|access[-_]?token|refresh[-_]?token|resume[-_]?token|cookie|password|secret)$/i
 const PROJECT_ACCESS_MODES = new Set(['controlled', 'full'])
 const PROJECT_DOCUMENT_EXTENSIONS = new Set(['.pdf', '.docx', '.xlsx', '.csv', '.pptx'])
@@ -1087,9 +1091,12 @@ function projectBinaryReaderTool(session, agentCtx) {
     async execute(args, exec) {
       const snapshot = await snapshotProjectReaderFile(session, agentCtx, args.file_path, exec.signal)
       try {
-        const info = await statFile(snapshot.path), offset = Number.isSafeInteger(Number(args.offset)) ? Number(args.offset) : 0,
+        const oneBasedOffset=session.readBinaryOffsetBase === 1, requestedOffset=oneBasedOffset
+          ? projectReadPositiveInteger(args.offset,1,'offset') - 1
+          : Number.isSafeInteger(Number(args.offset)) ? Number(args.offset) : 0,
+          info = await statFile(snapshot.path), offset=requestedOffset,
           length = Math.max(1, Math.min(PROJECT_BINARY_READ_LIMIT, Number.isSafeInteger(Number(args.length)) ? Number(args.length) : PROJECT_BINARY_READ_LIMIT))
-        if (offset < 0 || offset >= info.size) throw new Error(`offset ${offset} is outside this ${info.size}-byte file.`)
+        if (offset < 0 || offset >= info.size) throw new Error(`offset ${offset + (oneBasedOffset ? 1 : 0)} is outside this ${info.size}-byte file.`)
         const handle = await open(snapshot.path, 'r'), buffer = Buffer.alloc(Math.min(length, info.size - offset))
         let bytesRead = 0
         try { ({ bytesRead } = await handle.read(buffer, 0, buffer.length, offset)) }
@@ -1099,7 +1106,7 @@ function projectBinaryReaderTool(session, agentCtx) {
           const chunk = data.subarray(index, index + 16), hex = [...chunk].map(byte => byte.toString(16).padStart(2, '0')).join(' ').padEnd(47, ' '), ascii = [...chunk].map(byte => byte >= 0x20 && byte <= 0x7e ? String.fromCharCode(byte) : '.').join('')
           lines.push(`${(offset + index).toString(16).padStart(8, '0')}  ${hex}  |${ascii}|`)
         }
-        const end = offset + bytesRead, footer = end < info.size ? `Showing bytes ${offset}-${end - 1}. Use offset=${end} to continue.` : `End of file — ${info.size} bytes.`
+        const end = offset + bytesRead, footer = end < info.size ? `Showing bytes ${offset}-${end - 1}. Use offset=${end + (oneBasedOffset ? 1 : 0)} to continue.` : `End of file — ${info.size} bytes.`
         return boundedText(`<path>${session.project.name}</path>\n<type>binary</type>\n<content>\n${lines.join('\n')}\n\n${footer}\n</content>`, PROJECT_READ_MAX_BYTES)
       } finally { await snapshot.cleanup() }
     },
@@ -1237,28 +1244,29 @@ function canvasAgentTurnFileContext(session) {
 function canvasAgentTurnFileReaderTool(session, agentCtx) {
   return defineTool({
     name:'read_attachment',
-    description:'Read one exact current-turn file. selector is a PDF page, PPTX slide, spreadsheet sheet, or SQLite query according to file type. Files are read-only; parents and siblings are unavailable.',
+    description:`Read one current-turn file. offset is 1-based; omit it for the first read. Text/documents: omit limit for up to ${PROJECT_READ_MAX_LINES} lines/rows (50 KiB cap), then use the returned offset. selector is a 1-based PDF page/PPTX slide, sheet, or SQLite query. Read-only; no parent/sibling access.`,
     parameters:{
       file_id:{ type:'string', required:true },
-      selector:{ type:'string' },
-      offset:{ type:'number' },
-      limit:{ type:'number' },
-      render:{ type:'boolean' },
+      selector:{ type:'string', description:'Optional 1-based PDF page/PPTX slide, sheet, or read-only SQLite query.' },
+      offset:{ type:'number', description:'1-based line/row/byte position; default 1. Omit for the first read; continue with returned offset.' },
+      limit:{ type:'number', description:`Count. Text/documents: default/max ${PROJECT_READ_MAX_LINES}, 50 KiB cap. Binary: max ${PROJECT_BINARY_READ_LIMIT} bytes.` },
+      render:{ type:'boolean', description:'PDF only: render the selected page.' },
     },
     output:projectDocumentOutput(),
     timeoutMs:TOOL_TIMEOUT_MS,
     async execute(args, exec) {
-      const file=canvasAgentTurnFile(session,args.file_id), scoped={...session,project:file.project,projectSnapshotPath:file.snapshotPath}, selector=String(args.selector || '').trim(), delegated={file_path:file.project.name}
+      const file=canvasAgentTurnFile(session,args.file_id), scoped={...session,project:file.project,projectSnapshotPath:file.snapshotPath,readBinaryOffsetBase:1}, selector=String(args.selector || '').trim(), delegated={file_path:file.project.name}, hasOffset=args.offset!==undefined,
+        offset=hasOffset ? projectReadPositiveInteger(args.offset,1,'offset') : undefined
       const reader=['text','image','document','database','binary'].includes(file.project.reader) ? file.project.reader : 'binary'
-      if(reader==='binary'){if(args.offset!==undefined)delegated.offset=args.offset;if(args.limit!==undefined)delegated.length=args.limit}
+      if(reader==='binary'){if(hasOffset)delegated.offset=offset;if(args.limit!==undefined)delegated.length=args.limit}
       else if(reader==='database'){if(selector)delegated.query=selector;if(args.limit!==undefined)delegated.limit=args.limit}
       else if(reader==='document'){
         const extension=extname(file.project.name).toLowerCase()
         if(selector){if(extension==='.pdf')delegated.page=Number(selector);else if(extension==='.pptx')delegated.slide=Number(selector);else delegated.sheet=selector}
-        if(args.offset!==undefined)delegated.offset=args.offset
+        if(hasOffset)delegated.offset=offset
         if(args.limit!==undefined)delegated.limit=args.limit
         if(args.render===true)delegated.render_page=true
-      }else{if(args.offset!==undefined)delegated.offset=args.offset;if(args.limit!==undefined)delegated.limit=args.limit}
+      }else{if(hasOffset)delegated.offset=offset;if(args.limit!==undefined)delegated.limit=args.limit}
       const tool=reader==='image' ? projectImageReaderTool(scoped,agentCtx)
         : reader==='document' ? projectDocumentReaderTool(scoped,agentCtx)
           : reader==='database' ? projectDatabaseReaderTool(scoped,agentCtx)
@@ -1945,7 +1953,7 @@ export function connectionProfile(connection, configuredTimeoutMs) {
   const apiKeyEnv = `PENECHO_AI_CONNECTION_${digest.toUpperCase()}`
   const model = String(connection.apiModel || '').trim()
   const reasoning = apiHarnessReasoning(connection)
-  const { idleTimeoutMs, totalTimeoutMs } = canvasAgentTimeoutLimits(configuredTimeoutMs)
+  const { idleTimeoutMs } = canvasAgentTimeoutLimits(configuredTimeoutMs)
   return {
     provider,
     apiKeyEnv,
@@ -1954,7 +1962,6 @@ export function connectionProfile(connection, configuredTimeoutMs) {
       displayName:connection.name || `PenEcho ${model}`,
       api:connection.apiFormat === 'anthropic' ? 'anthropic-messages' : 'openai-completions',
       baseURL:providerBaseURL(connection),
-      timeoutMs:totalTimeoutMs,
       streamIdleTimeoutMs:idleTimeoutMs,
       defaultInput:['text', 'image'],
       defaultContextWindow:CANVAS_AGENT_CONTEXT_WINDOW,
@@ -2006,13 +2013,16 @@ function canvasAgentTerminalStopError(session, code, message, details = null) {
 
 function beginCanvasAgentToolCall(session, name) {
   const budget=session.canvasTurnBudget || (session.canvasTurnBudget=freshCanvasAgentTurnBudget())
+  const requestedLimit=Number(session.canvasAgentTurnLimit),maxToolCalls=Number.isInteger(requestedLimit)&&requestedLimit>0
+    ? requestedLimit
+    : DEFAULT_CANVAS_AGENT_TURN_LIMIT
   if (budget.stop) throw canvasAgentTerminalStopError(session,budget.stop.code,budget.stop.message,budget.stop.details)
-  if (budget.toolCalls>=CANVAS_AGENT_MAX_TOOL_CALLS_PER_USER_TURN) {
+  if (budget.toolCalls>=maxToolCalls) {
     throw canvasAgentTerminalStopError(
       session,
       'CANVAS_AGENT_TOOL_LIMIT_STOPPED',
-      `PenEcho Agent stopped after ${CANVAS_AGENT_MAX_TOOL_CALLS_PER_USER_TURN} Canvas tool calls in this user turn. Keep the best valid result and wait for a new user message before continuing.`,
-      { maxToolCalls:CANVAS_AGENT_MAX_TOOL_CALLS_PER_USER_TURN, attemptedTool:String(name||'') },
+      `PenEcho Agent reached the ${maxToolCalls}-round limit for this request. The current result and conversation are preserved; wait for the next user message before continuing.`,
+      { maxToolCalls, maxRounds:maxToolCalls, attemptedTool:String(name||'') },
     )
   }
   budget.toolCalls++
@@ -4129,7 +4139,7 @@ export async function createCanvasAgentNativeRuntime({ session, attachments }) {
 }
 
 export class CanvasHarnessHost {
-  constructor({ stateDirectory, rootDirectory, resolveConnection, listConnections, resolveWebSearch = () => null, resolveWidgetCapabilities = () => ({ professionalEnabled:false, privatePlugins:[] }), resolveProject = async () => null, callCli = callPenEchoCli, modelTimeoutMs = () => DEFAULT_CANVAS_AGENT_IDLE_TIMEOUT_MS, logger = () => {}, conversationLogger = null, conversationTrace = null, publicFetch = fetchPublicResource }) {
+  constructor({ stateDirectory, rootDirectory, resolveConnection, listConnections, resolveWebSearch = () => null, resolveWidgetCapabilities = () => ({ professionalEnabled:false, privatePlugins:[] }), resolveProject = async () => null, callCli = callPenEchoCli, modelTimeoutMs = () => DEFAULT_CANVAS_AGENT_IDLE_TIMEOUT_MS, canvasAgentTurnLimit = () => DEFAULT_CANVAS_AGENT_TURN_LIMIT, logger = () => {}, conversationLogger = null, conversationTrace = null, publicFetch = fetchPublicResource }) {
     this.stateDirectory = stateDirectory
     this.rootDirectory = rootDirectory
     this.resolveConnection = resolveConnection
@@ -4139,6 +4149,7 @@ export class CanvasHarnessHost {
     this.resolveProject = resolveProject
     this.callCli = callCli
     this.modelTimeoutMs = modelTimeoutMs
+    this.canvasAgentTurnLimit = canvasAgentTurnLimit
     this.logger = logger
     this.conversationLogger = typeof conversationLogger === 'function' ? conversationLogger : null
     this.conversationTrace = typeof conversationTrace === 'function' ? conversationTrace : null
@@ -4242,11 +4253,11 @@ export class CanvasHarnessHost {
     return providers
   }
 
-  async connect({ canvasSessionId, resumeToken, clientId, connectionId, webSearchEnabled = false, widgetCapabilities = {}, projectId = '', accessMode = 'controlled', binding = null, send, initialBacklog = [], continuity = '' }) {
-    if (String(canvasSessionId || '').length > 256 || String(resumeToken || '').length > 256 || String(clientId || '').length > 256 || String(connectionId || '').length > 256 || String(projectId || '').length > 128) {
+  async connect({ canvasSessionId, resumeToken, clientId, connectionId, conversationId = '', webSearchEnabled = false, widgetCapabilities = {}, projectId = '', accessMode = 'controlled', binding = null, send, initialBacklog = [], continuity = '' }) {
+    if (String(canvasSessionId || '').length > 256 || String(resumeToken || '').length > 256 || String(clientId || '').length > 256 || String(connectionId || '').length > 256 || String(conversationId || '').length > 256 || /[\r\n\0]/.test(String(conversationId || '')) || String(projectId || '').length > 128) {
       throw new Error('PenEcho Agent connection identity is invalid.')
     }
-    const normalizedProjectId = String(projectId || ''), normalizedAccessMode = String(accessMode || 'controlled')
+    const normalizedProjectId = String(projectId || ''), normalizedAccessMode = String(accessMode || 'controlled'), logicalConversationId=String(conversationId || '')
     if (!PROJECT_ACCESS_MODES.has(normalizedAccessMode)) throw new Error('PenEcho Agent project access mode is invalid.')
     const project = normalizedProjectId ? await this.resolveProject(normalizedProjectId) : null
     if (normalizedProjectId && !project) throw new Error('The selected local project was not found on this PenEcho host.')
@@ -4258,7 +4269,8 @@ export class CanvasHarnessHost {
         : null
     const resumeHash = resumeToken ? hash(resumeToken) : ''
     let session = canvasSessionId ? this.sessions.get(canvasSessionId) : null
-    if (session && session.connectionId === connectionId && session.webSearchKeyHash === webSearchKeyHash && session.webSearch.enabled === Boolean(webSearchEnabled) && session.widgetCapabilities.fingerprint === normalizedWidgetCapabilities.fingerprint && session.project?.id === project?.id && session.accessMode === effectiveAccessMode && session.resumeHash === resumeHash && this.resumeIndex.get(resumeHash) === session.id) {
+    const resumablePrevious=session&&resumeHash&&session.resumeHash===resumeHash&&this.resumeIndex.get(resumeHash)===session.id?session:null
+    if (session && (!logicalConversationId || session.logicalConversationId === logicalConversationId) && session.connectionId === connectionId && session.webSearchKeyHash === webSearchKeyHash && session.webSearch.enabled === Boolean(webSearchEnabled) && session.widgetCapabilities.fingerprint === normalizedWidgetCapabilities.fingerprint && session.project?.id === project?.id && session.accessMode === effectiveAccessMode && session.resumeHash === resumeHash && this.resumeIndex.get(resumeHash) === session.id) {
       clearTimeout(session.expiryTimer)
       session.expiryTimer = null
       session.clientId = clientId || session.clientId
@@ -4271,6 +4283,7 @@ export class CanvasHarnessHost {
       this.send(session, 'ready', {
         resumeToken,
         connectionId:session.connectionId,
+        conversationId:session.logicalConversationId,
         harnessSessionId:String(session.handle.agent.id),
         webSearchConfigured:true,
         webSearchEnabled:session.webSearch.enabled,
@@ -4330,6 +4343,7 @@ export class CanvasHarnessHost {
       canvasLayoutReviewRequired:false,
       lastCanvasMutationRevision:null,
       canvasTurnBudget:freshCanvasAgentTurnBudget(),
+      canvasAgentTurnLimit:turnLimit.configuredCanvasAgentTurnLimit(this.canvasAgentTurnLimit()),
       visualExplainerBudget:freshVisualExplainerBudget(),
       visualExplorerBudget:freshVisualExplorerBudget(),
       visualSkillsLoaded:new Set(),
@@ -4341,12 +4355,11 @@ export class CanvasHarnessHost {
       expiryTimer:null,
       handle:null,
       rpc:null,
+      logicalConversationId:logicalConversationId||randomUUID(),
       conversationLogId:randomUUID(),
       requestTraceConnection:requestTraceConnection(connection,selectedModel),
       modelSelection,
       continuity:boundedText(continuity,80_500),
-      modelStepTimeoutTimer:null,
-      modelStepTimeout:null,
       traceAsset:null,
       tracePatchProtocol:null,
       traceDecisionProtocol:null,
@@ -4386,42 +4399,7 @@ export class CanvasHarnessHost {
           else if (session.project?.kind === 'file') await agentCtx.plugin(PenEchoFilePlugin, { session })
           agentCtx.on('session/event', (observed, event) => {
             if (String(observed.id) !== String(handle?.agent?.id || session.handle?.agent?.id || '')) return
-            if(event?.type==='step/start'){
-              clearTimeout(session.modelStepTimeoutTimer)
-              session.modelStepTimeout=null
-              const {totalTimeoutMs}=canvasAgentTimeoutLimits(this.modelTimeoutMs(session.connectionId)),turn=Number(event.data?.turn),step=Number(event.data?.step),
-                hostDeadlineMs=Math.max(1,totalTimeoutMs-Math.min(1_000,Math.max(1,Math.floor(totalTimeoutMs*.1))))
-              session.modelStepTimeoutTimer=setTimeout(()=>{
-                session.modelStepTimeoutTimer=null
-                session.modelStepTimeout={turn,step,timeoutMs:totalTimeoutMs,publicEnded:true}
-                const timeoutEvent={type:'turn/end',time:Date.now(),data:{turn,reason:{kind:'error',error:{code:'TIMEOUT',message:`PenEcho Agent model request timed out after reaching the ${canvasAgentTimeoutSeconds(totalTimeoutMs)}-second total limit.`}}}}
-                this.traceConversation(session,'event',timeoutEvent,observed.deriveMessages())
-                const projected=publicSessionEvent(timeoutEvent,session)
-                if(projected){
-                  session.backlog.push(projected)
-                  if(session.backlog.length>MAX_BACKLOG)session.backlog.splice(0,session.backlog.length-MAX_BACKLOG)
-                  this.logConversation(session,'event',projected)
-                  this.send(session,'session_event',projected)
-                  this.send(session,'agent_status',{status:'idle'})
-                  void clearCanvasAgentTurnFiles(session).catch(error=>this.logger({ type:'canvas-agent-turn-file-cleanup-error', error:String(error?.message || error) }))
-                }
-                session.handle?.agent.cancel({kind:'hook',reason:'canvas-agent-model-step-timeout'})
-              },hostDeadlineMs)
-              session.modelStepTimeoutTimer?.unref?.()
-            }else if(event?.type==='step/end'){
-              clearTimeout(session.modelStepTimeoutTimer)
-              session.modelStepTimeoutTimer=null
-              if(!session.modelStepTimeout||session.modelStepTimeout.turn!==Number(event.data?.turn)||session.modelStepTimeout.step!==Number(event.data?.step))session.modelStepTimeout=null
-            }
-            let publicEvent=event
-            if(event?.type==='turn/end'){
-              clearTimeout(session.modelStepTimeoutTimer)
-              session.modelStepTimeoutTimer=null
-              const timedOut=session.modelStepTimeout
-              session.modelStepTimeout=null
-              if(timedOut?.publicEnded)return
-              if(timedOut&&timedOut.turn===Number(event.data?.turn))publicEvent={...event,data:{...event.data,reason:{kind:'error',error:{code:'TIMEOUT',message:`PenEcho Agent model request timed out after reaching the ${canvasAgentTimeoutSeconds(timedOut.timeoutMs)}-second total limit.`}}}}
-            }
+            const publicEvent=event
             let traceMessages
             if (publicEvent?.type === 'assistant/message') traceMessages = observed.deriveMessages().slice(0, -1)
             else if (publicEvent?.type === 'turn/end') traceMessages = observed.deriveMessages()
@@ -4453,6 +4431,7 @@ export class CanvasHarnessHost {
     this.send(session, 'ready', {
       resumeToken:nextResumeToken,
       connectionId:session.connectionId,
+      conversationId:session.logicalConversationId,
       harnessSessionId:String(handle.agent.id),
       webSearchConfigured:true,
       webSearchEnabled:session.webSearch.enabled,
@@ -4464,6 +4443,7 @@ export class CanvasHarnessHost {
       backlog:[],
     })
     this.send(session, 'agent_status', { status:handle.agent.status })
+    if(resumablePrevious)await this.disposeSession(resumablePrevious).catch(() => {})
     return session
   }
 
@@ -4650,6 +4630,7 @@ export class CanvasHarnessHost {
     this.traceConversation(session, 'connection-change')
     this.send(session, 'ready', {
       connectionId:session.connectionId,
+      conversationId:session.logicalConversationId,
       harnessSessionId:String(session.handle.agent.id),
       webSearchConfigured:true,
       webSearchEnabled:session.webSearch.enabled,
@@ -4803,9 +4784,6 @@ export class CanvasHarnessHost {
   disconnect(session, binding) {
     if (binding !== undefined && session.binding !== binding) return false
     session.connected = false
-    clearTimeout(session.modelStepTimeoutTimer)
-    session.modelStepTimeoutTimer=null
-    session.modelStepTimeout=null
     session.send = null
     for (const [requestId, pending] of session.pending) {
       session.pending.delete(requestId)
@@ -4820,7 +4798,6 @@ export class CanvasHarnessHost {
   async disposeSession(session) {
     if (!this.sessions.has(session.id)) return
     clearTimeout(session.expiryTimer)
-    clearTimeout(session.modelStepTimeoutTimer)
     this.sessions.delete(session.id)
     this.resumeIndex.delete(session.resumeHash)
     session.decisionFeedbackCalls?.clear()

@@ -100,8 +100,23 @@ export class CanvasAgentHostRouter {
     const connectionId = String(request?.connectionId || previous?.connectionId || 'default')
     const connection = this.resolveConnection(connectionId)
     if (!connection) throw new Error('The selected AI connection was not found.')
-    if (originalOwner) await originalOwner.disposeSession(previous)
-    return this.connect({ ...request, connectionId })
+    const replacement = await this.connect({ ...request, connectionId })
+    if (originalOwner) await originalOwner.disposeSession(previous).catch(() => {})
+    return replacement
+  }
+
+  async changeContext(previous, request) {
+    if (!previous) throw new Error('PenEcho Agent session is not established.')
+    const originalOwner = this.ownerForSession(previous)
+    const connectionId = String(request?.connectionId || previous.connectionId || 'default')
+    const connection = this.resolveConnection(connectionId)
+    if (!connection) throw new Error('The selected AI connection was not found.')
+    const initialBacklog = Array.isArray(previous.backlog) ? previous.backlog.slice() : []
+    const continuity = this.conversationContinuity(initialBacklog)
+    const conversationId = String(request?.conversationId || previous.logicalConversationId || '')
+    const replacement = await this.connect({ ...request, connectionId, conversationId, initialBacklog, continuity })
+    await originalOwner.disposeSession(previous).catch(() => {})
+    return replacement
   }
 
   async changeConnection(previous, request) {
@@ -118,7 +133,8 @@ export class CanvasAgentHostRouter {
     }
     const initialBacklog = Array.isArray(previous.backlog) ? previous.backlog.slice() : []
     const continuity = this.conversationContinuity(initialBacklog)
-    const replacement = await this.connect({ ...request, connectionId, send:request?.send, initialBacklog, continuity })
+    const conversationId = String(request?.conversationId || previous.logicalConversationId || '')
+    const replacement = await this.connect({ ...request, connectionId, conversationId, send:request?.send, initialBacklog, continuity })
     await originalOwner.disposeSession(previous).catch(() => {})
     return replacement
   }

@@ -32,6 +32,13 @@ const { createRemoteCanvasHttpExecutor } = require("./remote-canvas-http.js");
 const { attachCanvasAgent } = require("./canvas-agent/http.js");
 const { createCanvasAgentRequestTracer } = require("./canvas-agent/request-trace.js");
 const { CanvasAgentProjectStore } = require("./canvas-agent/project-store.js");
+const {
+  MIN_CANVAS_AGENT_TURN_LIMIT,
+  MAX_CANVAS_AGENT_TURN_LIMIT,
+  DEFAULT_CANVAS_AGENT_TURN_LIMIT,
+  validCanvasAgentTurnLimit,
+  configuredCanvasAgentTurnLimit,
+} = require("./canvas-agent/turn-limit.js");
 const { macosRemoteRoots, windowsDriveRoots } = require("./canvas-agent/host-roots.js");
 const { consumeNativePickerGrant } = require("./canvas-agent/native-picker-grants.js");
 const {
@@ -256,6 +263,9 @@ const requestTraceValue = optionalBoolean(process.env.PENECHO_REQUEST_TRACE),
   requestTraceLimitValue = requestTraceLimitText ? Number(requestTraceLimitText) : 100,
   requestTraceLimitValid = Number.isInteger(requestTraceLimitValue) && requestTraceLimitValue >= 1 && requestTraceLimitValue <= 1000,
   REQUEST_TRACE_LIMIT = requestTraceLimitValid ? requestTraceLimitValue : 100;
+const canvasAgentTurnLimitText = process.env.PENECHO_CANVAS_AGENT_TURN_LIMIT?.trim(),
+  canvasAgentTurnLimitValid = !canvasAgentTurnLimitText || validCanvasAgentTurnLimit(canvasAgentTurnLimitText),
+  CANVAS_AGENT_TURN_LIMIT = configuredCanvasAgentTurnLimit(canvasAgentTurnLimitText || DEFAULT_CANVAS_AGENT_TURN_LIMIT);
 const timeoutText = firstNonEmpty(
     process.env.AI_TIMEOUT_SECONDS,
     AI_PROVIDER === "kimi-cli" ? process.env.KIMI_CLI_TIMEOUT_SECONDS : "",
@@ -712,6 +722,7 @@ function canvasSettings() {
     effort:AI_EFFORT || DEFAULT_REASONING_EFFORT,
     timeoutSeconds:MODEL_TIMEOUT_MS / 1000,
     maxTokens:MODEL_MAX_TOKENS,
+    canvasAgentTurnLimit:CANVAS_AGENT_TURN_LIMIT,
     autoDelaySeconds:AUTO_AI_DELAY_MS / 1000,
     imageFormat:AI_IMAGE_FORMAT || "webp",
     requestTrace:REQUEST_TRACE_ENABLED,
@@ -771,7 +782,7 @@ function normalizeCanvasSettings(input) {
     if (!deepSeekSearchProvider) throw new Error("Choose where the DeepSeek Flash search key comes from.");
     return { PENECHO_SETTINGS_SCOPE:scope, DEEPSEEK_SEARCH_PROVIDER:deepSeekSearchProvider, ...(deepseekSearchApiKey ? { DEEPSEEK_SEARCH_API_KEY:deepseekSearchApiKey } : {}), ...(tavilyApiKey ? { TAVILY_API_KEY:tavilyApiKey } : {}) };
   }
-  const provider = normalizeAiProvider(input.provider), format = String(input.apiFormat || "").trim().toLowerCase(), preset = String(input.apiPreset || "").trim(), urlText = String(input.apiUrl || "").trim(), model = String(input.apiModel || "").trim(), key = String(input.apiKey || "").trim(), effort = connectionEffort(input.effort), imageFormat = String(input.imageFormat || "").trim().toLowerCase(), timeout = Number(input.timeoutSeconds), maxTokens = configuredMaxTokens(input.maxTokens), autoDelay = Number(input.autoDelaySeconds), traceLimit = Number(input.requestTraceLimit);
+  const provider = normalizeAiProvider(input.provider), format = String(input.apiFormat || "").trim().toLowerCase(), preset = String(input.apiPreset || "").trim(), urlText = String(input.apiUrl || "").trim(), model = String(input.apiModel || "").trim(), key = String(input.apiKey || "").trim(), effort = connectionEffort(input.effort), imageFormat = String(input.imageFormat || "").trim().toLowerCase(), timeout = Number(input.timeoutSeconds), maxTokens = configuredMaxTokens(input.maxTokens), agentTurnLimit = input.canvasAgentTurnLimit === undefined ? CANVAS_AGENT_TURN_LIMIT : Number(input.canvasAgentTurnLimit), autoDelay = Number(input.autoDelaySeconds), traceLimit = Number(input.requestTraceLimit);
   if (!provider) throw new Error("Choose an AI provider.");
   let url;
   if (provider === "api") {
@@ -785,6 +796,7 @@ function normalizeCanvasSettings(input) {
   }
   if (!Number.isInteger(timeout) || timeout < 10 || timeout > 600) throw new Error("Timeout must be between 10 and 600 seconds.");
   if (maxTokens === null) throw new Error(`MAX_TOKENS must be an integer larger than ${MIN_MAX_TOKENS}.`);
+  if (!validCanvasAgentTurnLimit(agentTurnLimit)) throw new Error(`PenEcho Agent rounds per request must be an integer from ${MIN_CANVAS_AGENT_TURN_LIMIT} to ${MAX_CANVAS_AGENT_TURN_LIMIT}.`);
   if (!Number.isFinite(autoDelay) || autoDelay < 0 || autoDelay > 60) throw new Error("Auto AI delay must be between 0 and 60 seconds.");
   if (!new Set(["webp", "png"]).has(imageFormat)) throw new Error("Choose a supported canvas image format.");
   if (!Number.isInteger(traceLimit) || traceLimit < 1 || traceLimit > 1000) throw new Error("Request trace limit must be between 1 and 1000.");
@@ -794,7 +806,7 @@ function normalizeCanvasSettings(input) {
     PENECHO_SETTINGS_SCOPE:scope,
     AI_PROVIDER:provider, ...(provider === "api" ? { AI_API_FORMAT:format, AI_API_URL:urlText.replace(/\/+$/, ""), AI_API_MODEL:model, PENECHO_API_PRESET:preset || inferredApiPreset(format, urlText), ...(key ? { AI_API_KEY:key } : {}) } : {}),
     ...(cliFields ? { [cliFields[0]]:String(cliFields[2] || "").trim(), [cliFields[1]]:String(cliFields[3] || cliFields[4]).trim() } : {}),
-    AI_EFFORT:effort, AI_TIMEOUT_SECONDS:String(timeout), MAX_TOKENS:String(maxTokens),
+    AI_EFFORT:effort, AI_TIMEOUT_SECONDS:String(timeout), MAX_TOKENS:String(maxTokens), PENECHO_CANVAS_AGENT_TURN_LIMIT:String(agentTurnLimit),
     AUTO_AI_DELAY_SECONDS:String(autoDelay), PENECHO_AI_IMAGE_FORMAT:imageFormat,
     PENECHO_REQUEST_TRACE:String(input.requestTrace === true), PENECHO_REQUEST_TRACE_LIMIT:String(traceLimit),
   };
@@ -824,6 +836,7 @@ function providerConfigurationError(provider = activeProviderSnapshot()) {
   if (debugArtifactsValue === null) return "PENECHO_DEBUG_ARTIFACTS must be true or false when set.";
   if (requestTraceValue === null) return "PENECHO_REQUEST_TRACE must be true or false when set.";
   if (!requestTraceLimitValid) return "PENECHO_REQUEST_TRACE_LIMIT must be an integer between 1 and 1000.";
+  if (!canvasAgentTurnLimitValid) return `PENECHO_CANVAS_AGENT_TURN_LIMIT must be an integer from ${MIN_CANVAS_AGENT_TURN_LIMIT} to ${MAX_CANVAS_AGENT_TURN_LIMIT}.`;
   if (!timeoutValid) return "AI_TIMEOUT_SECONDS must be an integer from 10 to 600.";
   if (!maxTokensValid) return `MAX_TOKENS must be an integer larger than ${MIN_MAX_TOKENS}.`;
   return null;
@@ -3440,7 +3453,7 @@ const server = http.createServer(async (req, res) => {
       const scope = updates.PENECHO_SETTINGS_SCOPE;
       delete updates.PENECHO_SETTINGS_SCOPE;
       const providerNames = new Set(["AI_PROVIDER", "AI_API_FORMAT", "AI_API_URL", "AI_API_MODEL", "AI_API_KEY", "AI_EFFORT", "PENECHO_API_PRESET", "KIMI_CLI_MODEL", "KIMI_CLI_PATH", "CODEX_CLI_MODEL", "CODEX_CLI_PATH", "CLAUDE_CLI_MODEL", "CLAUDE_CLI_PATH"]),
-        systemNames = new Set(["AI_TIMEOUT_SECONDS", "MAX_TOKENS", "AUTO_AI_DELAY_SECONDS", "PENECHO_AI_IMAGE_FORMAT", "PENECHO_REQUEST_TRACE", "PENECHO_REQUEST_TRACE_LIMIT"]),
+        systemNames = new Set(["AI_TIMEOUT_SECONDS", "MAX_TOKENS", "PENECHO_CANVAS_AGENT_TURN_LIMIT", "AUTO_AI_DELAY_SECONDS", "PENECHO_AI_IMAGE_FORMAT", "PENECHO_REQUEST_TRACE", "PENECHO_REQUEST_TRACE_LIMIT"]),
         scopeNames = scope === "api" ? providerNames : scope === "search" ? new Set(["DEEPSEEK_SEARCH_PROVIDER", "DEEPSEEK_SEARCH_API_KEY", "TAVILY_API_KEY"]) : systemNames,
         selected = Object.fromEntries(Object.entries(updates).filter(([name]) => scopeNames.has(name)));
       writeCanvasConfiguration(selected);
@@ -3997,6 +4010,7 @@ const canvasAgent = attachCanvasAgent({
   stateDirectory:STATE_DIRECTORY||CLOUD_STATE_DIRECTORY,
   rootDirectory:ROOT,
   modelTimeoutMs:()=>MODEL_TIMEOUT_MS,
+  canvasAgentTurnLimit:()=>CANVAS_AGENT_TURN_LIMIT,
   logger:log,
   conversationLogger:DEBUG_ARTIFACTS?log:null,
   conversationTrace:canvasAgentRequestTracer,

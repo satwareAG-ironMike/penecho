@@ -129,7 +129,7 @@ test("feature tour persists seen ids, supports replay, and repositions accessibl
   assert.doesNotMatch(app, /resolveInitialLanguage\([^)]*navigator/);
 });
 
-test("1.1.4 changelog introduces PenEcho Agent visual productivity in a concise one-page dialog", () => {
+test("1.1.5 changelog introduces PenEcho Agent visual productivity in a concise one-page dialog", () => {
   const html = read("public/index.html"),
     app = read("public/app.js"),
     css = read("public/style.css"),
@@ -140,10 +140,10 @@ test("1.1.4 changelog introduces PenEcho Agent visual productivity in a concise 
   assert.doesNotMatch(layer, /aria-describedby=/);
   for (const id of ["changelogClose", "changelogTitle"]) assert.match(layer, new RegExp(`id="${id}"`));
   for (const id of ["changelogIntro", "changelogCurrentVersion", "changelogDone"]) assert.doesNotMatch(layer, new RegExp(`id="${id}"`));
-  assert.match(layer, />1\.1\.4</);
+  assert.match(layer, />1\.1\.5</);
   assert.doesNotMatch(layer, /class="changelog-demo"|class="changelog-release changelog-earlier"/);
   assert.match(app, /CHANGELOG_STORAGE_KEY = "penecho-changelog-seen"/);
-  assert.match(app, /CHANGELOG_VERSION = "1\.1\.4"/);
+  assert.match(app, /CHANGELOG_VERSION = "1\.1\.5"/);
   assert.match(app, /localStorage\.getItem\(CHANGELOG_STORAGE_KEY\) === CHANGELOG_VERSION/);
   assert.match(app, /localStorage\.setItem\(CHANGELOG_STORAGE_KEY, CHANGELOG_VERSION\)/);
   assert.match(app, /function maybeStartOnboarding\(\)\s*\{\s*if \(window\.PENECHO_CONFIG\?\.runtime === "viewer"\) return false;\s*if \(!maybeStartFeatureTour\(\)\) maybeShowChangelog\(\);/);
@@ -151,7 +151,7 @@ test("1.1.4 changelog introduces PenEcho Agent visual productivity in a concise 
   assert.match(app, /changelogLayer\.addEventListener\("keydown", handleChangelogKeydown\)/);
   assert.match(css, /\.changelog-layer\s*\{[^}]*position:\s*fixed;[^}]*inset:\s*0;[^}]*place-items:\s*center/);
   assert.match(css, /\.changelog-dialog\s*\{[^}]*width:\s*min\(620px,[^}]*max-height:/);
-  for (const key of ["changelogDialog", "changelogBadge", "changelogTitle", "changelogCanvasAgentResearch", "changelogCanvasAgentWorkspace"]) {
+  for (const key of ["changelogDialog", "changelogBadge", "changelogTitle", "changelogCanvasAgentResearch", "changelogCanvasAgentWorkspace", "changelogAgentContinuity", "changelogAgentMath", "changelogEraserMemory"]) {
     assert.match(app, new RegExp(`${key}:`), `missing English ${key}`);
     assert.match(zh, new RegExp(`${key}:`), `missing Chinese ${key}`);
   }
@@ -159,11 +159,17 @@ test("1.1.4 changelog introduces PenEcho Agent visual productivity in a concise 
     assert.doesNotMatch(app, new RegExp(`${key}:`));
     assert.doesNotMatch(zh, new RegExp(`${key}:`));
   }
-  assert.equal((layer.match(/<li data-i18n="changelog/g) || []).length, 2);
+  assert.equal((layer.match(/<li data-i18n="changelog/g) || []).length, 5);
   assert.match(app, /changelogCanvasAgentResearch:[^\n]*folders, files, web research[^\n]*structured visual work/);
   assert.match(app, /changelogCanvasAgentWorkspace:[^\n]*Visual Explorer[^\n]*less tool switching and rework/);
+  assert.match(app, /changelogAgentContinuity:[^\n]*same conversation[^\n]*request-round limit/);
+  assert.match(app, /changelogAgentMath:[^\n]*explicit continuation[^\n]*TeX/);
+  assert.match(app, /changelogEraserMemory:[^\n]*eraser or area eraser/);
   assert.match(zh, /changelogCanvasAgentResearch:[^\n]*画布下方[^\n]*结构化视觉成果/);
   assert.match(zh, /changelogCanvasAgentWorkspace:[^\n]*Visual Explorer[^\n]*减少工具切换与返工/);
+  assert.match(zh, /changelogAgentContinuity:[^\n]*保持同一会话[^\n]*轮次上限/);
+  assert.match(zh, /changelogAgentMath:[^\n]*续读位置[^\n]*TeX/);
+  assert.match(zh, /changelogEraserMemory:[^\n]*橡皮擦[^\n]*范围橡皮擦/);
 });
 
 test("feature tour copy is complete in English and Chinese", () => {

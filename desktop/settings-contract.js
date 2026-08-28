@@ -1,6 +1,11 @@
 "use strict";
 
 const { DEFAULT_REASONING_EFFORT } = require("../src/providers/reasoning-effort.js");
+const {
+  MIN_CANVAS_AGENT_TURN_LIMIT,
+  MAX_CANVAS_AGENT_TURN_LIMIT,
+  DEFAULT_CANVAS_AGENT_TURN_LIMIT,
+} = require("../src/server/canvas-agent/turn-limit.js");
 
 const PROVIDERS = new Set(["api", "kimi", "kimi-cli", "codex-cli", "claude-cli"]);
 const FORMATS = new Set(["openai", "anthropic"]);
@@ -88,6 +93,7 @@ function normalizeSettings(input, options = {}) {
   if (!["127.0.0.1", "0.0.0.0"].includes(host)) throw new Error("Choose local-only or LAN listening.");
   const port = number(input.port ?? 3888, "Port", 0, 65535, true);
   const timeout = number(input.timeout ?? 180, "Model timeout", 10, 600, true);
+  const canvasAgentTurnLimit = number(input.canvasAgentTurnLimit ?? DEFAULT_CANVAS_AGENT_TURN_LIMIT, "PenEcho Agent rounds per request", MIN_CANVAS_AGENT_TURN_LIMIT, MAX_CANVAS_AGENT_TURN_LIMIT, true);
   const autoDelay = number(input.autoDelay ?? 5, "Auto AI delay", 0, 10);
   const canvasAgentAutoOpen = input.canvasAgentAutoOpen === undefined ? true : input.canvasAgentAutoOpen;
   if (typeof canvasAgentAutoOpen !== "boolean") throw new Error("PenEcho Agent auto-open must be true or false.");
@@ -97,6 +103,7 @@ function normalizeSettings(input, options = {}) {
     PENECHO_DESKTOP_PROVIDER:provider,
     AI_EFFORT:effort,
     AI_TIMEOUT_SECONDS:String(timeout),
+    PENECHO_CANVAS_AGENT_TURN_LIMIT:String(canvasAgentTurnLimit),
     PENECHO_AI_IMAGE_FORMAT:imageFormat,
     AUTO_AI_DELAY_SECONDS:String(autoDelay),
     PENECHO_CANVAS_AGENT_AUTO_OPEN:String(canvasAgentAutoOpen),
@@ -182,6 +189,7 @@ function publicSettings(configuration, options = {}) {
     claudePath:String(env.CLAUDE_CLI_PATH || ""),
     effort:String(env.AI_EFFORT || "medium"),
     timeout:String(env.AI_TIMEOUT_SECONDS || "180"),
+    canvasAgentTurnLimit:String(env.PENECHO_CANVAS_AGENT_TURN_LIMIT || DEFAULT_CANVAS_AGENT_TURN_LIMIT),
     imageFormat:String(env.PENECHO_AI_IMAGE_FORMAT || "webp"),
     autoDelay:String(env.AUTO_AI_DELAY_SECONDS || "5"),
     canvasAgentAutoOpen:!/^(?:0|false|no|off)$/i.test(String(env.PENECHO_CANVAS_AGENT_AUTO_OPEN || "true")),
