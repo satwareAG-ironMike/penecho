@@ -138,7 +138,9 @@ model not downloaded, wrong key); silent failures destroy trust.
 
 - **TC-001**: Coverage target >= 80% for the new provider module.
 - **TC-002**: Contract tests run against a local in-process OpenAI mock
-  server (streaming + tool-call round trip) with no external network access.
+  server (streaming round trip, canvas JSON command round trip including
+  markdown-fence tolerance, `reasoning_content` handling) with no external
+  network access.
 - **TC-003**: Live smoke matrix against the public Lemonade endpoint with the
   starting model set (below); results recorded in the issue, not the repo.
 - **TC-004**: Egress audit for FR-005: scripted network capture during a full
@@ -171,14 +173,23 @@ Grounded in the live catalog of the test-fleet OpenAI-compatible server
 Notes:
 
 - The public endpoint `api.satware.ai` requires its own Bearer key (the LAN
-  key is rejected); obtaining/provisioning it is a test-env task in the
-  milestone.
-- The public instance's live model set is re-queried via `GET /v1/models`
-  during test-env setup; the matrix above is the requested starting set and
-  may be adjusted to whatever the public instance has downloaded.
+  key is rejected); the key was provided and verified on 2026-08-30 (never
+  stored in repo or issues).
+- **Live state of the public instance (2026-08-30)**: only
+  `Qwen3.6-35B-A3B-MTP-GGUF` (chat, 256k ctx) is downloaded, plus
+  embedding/reranker/transcription models. The remaining matrix models must
+  be provisioned on the instance or the matrix narrowed (issue #8).
 - Capability gates: any matrix model MUST reliably produce the canvas JSON
   command schema (FR-003); streaming is expected for all (SSE on
   `/v1/chat/completions` with `stream: true`).
+
+**Live verification findings (2026-08-30, Qwen3.6-35B-A3B-MTP-GGUF):**
+
+| Check | Result |
+|-------|--------|
+| Chat round trip | PASS (~2.5s, 138 completion tokens) |
+| Thinking mode | ON by default - responses carry a separate `reasoning_content` field; `max_tokens` budgets MUST account for reasoning, empty `content` at tiny budgets is expected, not an error |
+| Canvas JSON command | PASS - valid `write_text` schema, but wrapped in a markdown ```json fence despite an explicit "no markdown" instruction; client-side fence tolerance MUST be verified and covered by a contract test (TC-002) |
 
 ## Assumptions & Handoffs
 
