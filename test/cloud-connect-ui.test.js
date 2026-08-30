@@ -724,7 +724,7 @@ test("a newly paired device automatically changes from Connecting to Connected",
   assert.ok(pairingKey);
   assert.ok(linkDevice);
 
-  pairingKey.value = "PEN-ABCD-2345";
+  pairingKey.value = "PEN-XXXX-0000";
   run.setStatus(deviceStatus());
   linkDevice.click();
   await run.flush();

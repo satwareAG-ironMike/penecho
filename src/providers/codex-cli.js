@@ -191,6 +191,8 @@ function runJsonProcess(launch, args, prompt, cwd, env, signal, onProgress = nul
     if (signal?.aborted) return reject(abortError());
     let child;
     try {
+      // launch.command is a local CLI from on-device config; shell:false + array args.
+      // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process
       child = spawn(launch.command, [...launch.prefixArgs, ...args], { cwd, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, shell: false, detached: process.platform !== "win32" });
     } catch (error) {
       return reject(error);

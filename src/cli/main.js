@@ -293,6 +293,8 @@ function runCaptured(launch, args, options = {}) {
   return new Promise((resolve, reject) => {
     let child;
     try {
+      // launch.command is a local CLI from on-device config; shell:false + array args.
+      // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process
       child = spawn(launch.command, [...launch.prefixArgs, ...args], {
         cwd: options.cwd || process.cwd(), env: options.env || process.env,
         stdio: ["ignore", "pipe", "pipe"], windowsHide: true, shell: false,

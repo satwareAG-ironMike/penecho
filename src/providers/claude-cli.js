@@ -200,6 +200,8 @@ function runProcess(launch, args, input, cwd, env, signal, onProgress = null, on
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(abortError());
     let child;
+    // launch.command is a local CLI from on-device config; shell:false + array args.
+    // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process
     try { child = spawn(launch.command, [...launch.prefixArgs, ...args], { cwd, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, shell: false, detached: process.platform !== "win32" }); }
     catch (error) { reject(error); return; }
     let termination = null, settled = false, lineBuffer = "", stderr = "", responseStarted = false;
