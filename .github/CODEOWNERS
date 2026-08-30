@@ -1,0 +1,10 @@
+# Fork maintenance (satwareAG-ironMike)
+# ADR: docs/adr/0001-fork-working-model.md
+
+* @satwareAG-ironMike
+
+# Security-relevant surfaces require a second look
+SECURITY.md @satwareAG-ironMike
+.github/ @satwareAG-ironMike
+src/server/cloud-connector.js @satwareAG-ironMike
+src/providers/ @satwareAG-ironMike
