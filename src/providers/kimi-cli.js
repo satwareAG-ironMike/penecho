@@ -243,6 +243,8 @@ function runProcess(launch, args, cwd, env, signal, onActivity = null, onUsage =
     if (signal?.aborted) return reject(abortError());
     const streamJson = outputFormat !== "text";
     let child;
+    // launch.command is a local CLI from on-device config; shell:false + array args.
+    // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process
     try { child = spawn(launch.command, [...launch.prefixArgs, ...args], { cwd, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true, shell: false, detached: process.platform !== "win32" }); }
     catch (error) { return reject(error); }
     let settled = false, lineBuffer = "", stderr = "", content = "", termination = null;

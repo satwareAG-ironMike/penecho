@@ -934,7 +934,7 @@ test("device pairing requires a local Cloud account session", async () => {
     let requested = false;
     global.fetch = async () => { requested = true; throw new Error("unexpected request"); };
     await assert.rejects(
-      connector.pair({ origin: "https://penecho.ai", code: "PEN-ABCD-2345" }),
+      connector.pair({ origin: "https://penecho.ai", code: "PEN-XXXX-0000" }),
       /Connect your PenEcho Cloud account/,
     );
     assert.equal(requested, false);
@@ -973,7 +973,7 @@ test("re-pairing replaces an existing relay before connecting the new credential
 
     const status = await connector.pair({
       origin: "http://127.0.0.1:8080",
-      code: "PEN-ABCD-2345",
+      code: "PEN-XXXX-0000",
       name: "Replacement",
       platform: "test",
     });
