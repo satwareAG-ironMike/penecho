@@ -52,11 +52,11 @@ After each sync: re-run the verification against the new upstream HEAD
 |------|-------|
 | `src/cli/` | CLI entry, configure, update, node-version gate |
 | `src/server/` | local server, cloud connector, canvas-agent runtime |
-| `src/providers/` | AI CLI providers (Claude, Codex, Kimi) |
+| `src/providers/` | AI providers: Claude/Codex/Kimi CLI + `api` (OpenAI/Anthropic-compatible HTTP) |
 | `public/` | canvas client |
 | `desktop/`, `tools/` | Electron + mobile packaging |
 | `test/` | `node:test` suite |
-| `specs/` | SDD specs; IPADP metadata in `specs/metadata.json` |
+| `specs/` | SDD specs (active feature: `002-local-ai-gdpr-compat`, milestone `local-ai-gdpr-compat`); IPADP metadata in `specs/metadata.json` |
 | `docs/adr/` | decision records |
 
 ## License & Compliance
