@@ -175,10 +175,12 @@ Notes:
 - The public endpoint `api.satware.ai` requires its own Bearer key (the LAN
   key is rejected); the key was provided and verified on 2026-08-30 (never
   stored in repo or issues).
-- **Live state of the public instance (2026-08-30)**: only
-  `Qwen3.6-35B-A3B-MTP-GGUF` (chat, 256k ctx) is downloaded, plus
-  embedding/reranker/transcription models. The remaining matrix models must
-  be provisioned on the instance or the matrix narrowed (issue #8).
+- **Live state + decision (2026-08-30)**: only
+  `Qwen3.6-35B-A3B-MTP-GGUF` (chat, 256k ctx) is downloaded on the public
+  instance (plus embedding/reranker/transcription). The instance is at
+  memory capacity, so **the live matrix is narrowed to the flagship**
+  (decision: mw, 2026-08-30); the remaining models stay as deferred
+  candidates for a later, larger instance.
 - Capability gates: any matrix model MUST reliably produce the canvas JSON
   command schema (FR-003); streaming is expected for all (SSE on
   `/v1/chat/completions` with `stream: true`).
@@ -225,8 +227,10 @@ Notes:
   content egress (egress audit green).
 - **SC-002**: `npm test` green including new provider contract tests;
   coverage >= 80% on the new module (TC-001, TC-002).
-- **SC-003**: Live matrix (TC-003): at least the two Primary models pass the
-  smoke test (conversation + streaming + one tool-call round trip) against
-  `api.satware.ai`.
+- **SC-003**: Live matrix (TC-003): the flagship model
+  (`Qwen3.6-35B-A3B-MTP-GGUF`, sole provisioned chat model - matrix narrowed
+  2026-08-30 due to instance memory capacity) passes the full smoke test
+  (conversation + streaming + canvas JSON command round trip + degraded
+  paths) against `api.satware.ai`.
 - **SC-004**: Data-flow document (FR-008) reviewed and published; in-app
   reference present.
