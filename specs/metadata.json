@@ -1,0 +1,21 @@
+{
+  "name": "penecho-fork",
+  "version": "1.0.0",
+  "sdd_source": "https://github.com/satwareAG/spec-kit",
+  "forge": "github",
+  "visibility": "public",
+  "ipadp": {
+    "conformance_level": "L1",
+    "issue_tracker": "https://github.com/satwareAG-ironMike/penecho/issues"
+  },
+  "upstream": {
+    "penecho": {
+      "url": "https://github.com/penecho/penecho",
+      "forge": "github",
+      "channel": "none (no upstream communication, ADR 0001)",
+      "sync": "main tracks upstream main, pull-only"
+    }
+  },
+  "downstream": {},
+  "issue_tracker": "https://github.com/satwareAG-ironMike/penecho/issues"
+}
