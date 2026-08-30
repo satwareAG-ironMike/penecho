@@ -9,6 +9,11 @@
 # Exit code: number of failed checks (0 = all green).
 set -uo pipefail
 
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  sed -n '2,/^set /p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
+  exit 0
+fi
+
 BASE="${1:-https://api.satware.ai}"
 BASE="${BASE%/}"
 MODEL="${2:-Qwen3.6-35B-A3B-MTP-GGUF}"
@@ -70,7 +75,6 @@ cat > "$TMP/unknown.json" << EOF
 {"model":"definitely-not-a-model","messages":[{"role":"user","content":"hi"}],"max_tokens":10}
 EOF
 unk_body=$(post_chat "$TMP/unknown.json" 30)
-unk_code=$(json_field "$unk_body" '.error.code // .error.type // ""')
 if [ "$(json_field "$unk_body" '.error | type')" = "object" ]; then
   report "C3 unknown-model-error" 0 "error: $(json_field "$unk_body" '.error.message // .error.code // "present"')"
 else

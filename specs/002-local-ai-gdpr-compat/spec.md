@@ -148,19 +148,20 @@ model not downloaded, wrong key); silent failures destroy trust.
 
 ## Key Entities & Data Model
 
-- **ProviderConfig**: type (`cli` existing | `openai-compatible` new),
-  base URL, API key reference (on-device secret), default model, fetched
-  model list (cached), enabled flag.
+- **ProviderConfig**: type (`cli` | `api`, both existing - no new provider
+  type in current scope), base URL, API key reference (on-device secret),
+  default model, fetched model list (cached), enabled flag.
 - **Conversation routing**: each conversation references an active provider
   (FR-009); fallback behavior when the provider is offline is unspecified
   here (CLARIFY item).
 - **DataFlowDocument**: mode, data categories, recipients, purposes,
   retention, legal basis (GDPR Art. 13/14 transparency).
 
-## Starting Model Test Matrix (live-verified 2026-08-30)
+## Model Test Matrix (live-verified 2026-08-30)
 
 Grounded in the live catalog of the test-fleet OpenAI-compatible server
-(same server family as `api.satware.ai`):
+(same server family as `api.satware.ai`). Live matrix = flagship row only
+(narrowed 2026-08-30, see notes); other rows are deferred candidates:
 
 | Tier | Model | Labels | Rationale |
 |------|-------|--------|-----------|
