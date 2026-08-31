@@ -2,7 +2,7 @@
 
 **Feature Branch**: `feat/002-local-ai-gdpr-compat`
 **Created**: 2026-08-30
-**Status**: Draft (pending CLARIFY)
+**Status**: Clarified (ready for PLAN)
 **Rigor Level**: Spec-Anchored
 **Milestone**: `local-ai-gdpr-compat`
 
@@ -214,21 +214,27 @@ Notes:
 - **Assumption 3**: The plan phase MUST diff the existing `api` provider
   coverage FR-by-FR and keep only the delta in plan/tasks (contracts in
   `contracts/`: `config.env` keys, canvas command protocol for local models).
-- **Next Step**: `/spec.clarify` (open items below), then `/spec.plan`.
+- **Next Step**: `/spec.plan` (clarification decisions below, 2026-08-31).
 
-## Open Clarification Items
+## Clarification Decisions (2026-08-31)
 
-1. Offline conversation fallback: when the active provider is offline,
-   should the conversation error out (recommended) or fall back to another
-   provider? (Recommended: explicit error, no silent fallback - GDPR
-   predictability.)
-2. Key storage format: reuse the existing on-device secret file pattern
-   (recommended) vs. new env-var-only support.
-3. Model list refresh: fetch `/v1/models` on save + manual refresh
-   (recommended) vs. periodic polling.
-4. Scope guard: does "full local AI stack" include non-chat modalities
-   (TTS/STT/image) in this spec? (Recommended: NO - chat + tool calling only;
-   separate spec if wanted.)
+Decided per the documented recommendation (user may still veto at review):
+
+1. **Offline conversation fallback**: explicit error, no silent fallback.
+   Rationale: GDPR predictability - a silent provider switch could move
+   content to an endpoint the user did not choose for this conversation.
+2. **Key storage format**: reuse the existing on-device secret file pattern
+   (`~/.penecho/config.env`, mode 0600; env override). Rationale: verified
+   in code, zero new surface; env-var-only would break the existing CLI
+   workflow.
+3. **Model list refresh**: fetch `/v1/models` on save + manual refresh.
+   Rationale: no polling (privacy: avoid periodic outbound calls); pairs
+   with the issue #12 wizard probe so a saved config is validated once, not
+   continuously.
+4. **Scope guard**: chat + tool calling only. TTS/STT/image modalities are
+   out of scope for this spec (separate spec if wanted). Rationale: the
+   canvas-agent loop is chat + JSON commands; adding modalities changes the
+   data-flow document (FR-008) scope.
 
 ## Success Criteria
 
