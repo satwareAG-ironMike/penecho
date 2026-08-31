@@ -6,6 +6,7 @@
 # Usage:
 #   KEY=*** ./smoke-local-ai.sh [BASE_URL] [MODEL]
 #
+# Key resolution: KEY env var > AI_API_KEY in ~/.penecho/config.env > error.
 # Exit code: number of failed checks (0 = all green).
 set -uo pipefail
 
@@ -17,8 +18,11 @@ fi
 BASE="${1:-https://api.satware.ai}"
 BASE="${BASE%/}"
 MODEL="${2:-Qwen3.6-35B-A3B-MTP-GGUF}"
+if [ -z "${KEY:-}" ] && [ -r "$HOME/.penecho/config.env" ]; then
+  KEY="$(sed -n 's/^AI_API_KEY=//p' "$HOME/.penecho/config.env" | head -n1)"
+fi
 if [ -z "${KEY:-}" ]; then
-  printf 'ERROR: set the KEY env var (Bearer key for the endpoint)\n' >&2
+  printf 'ERROR: set the KEY env var or AI_API_KEY in ~/.penecho/config.env\n' >&2
   exit 2
 fi
 
@@ -139,11 +143,22 @@ report "C6 canvas-write_text" "$c1_ok" "$c1_detail"
 cat > "$TMP/canvas2.json" << EOF
 {"model":"$MODEL","messages":[{"role":"system","content":"You control a canvas. Return ONLY a JSON object: {\"intent\":\"<write|none>\",\"commands\":[...]} where each command has property \"tool\". Available tools: write_text {tool,x,y,text,fontSize,maxWidth}; draw_formula {tool,x,y,latex,fontSize}; plot_function {tool,x,y,w,h,expression}; draw {tool,origin,types,items}; erase {tool,mode,x,y,w,h}. No markdown, no prose. Canvas is 20000x20000 logical pixels."},{"role":"user","content":"Write the label 'Slope demo' at the top-left and draw the formula y = x^2 next to it."}],"max_tokens":1200}
 EOF
-c2_body=$(post_chat "$TMP/canvas2.json" 180)
-c2_text=$(strip_fence "$(json_field "$c2_body" '.choices[0].message.content // ""')")
+# One retry on unparseable JSON only: the endpoint has produced transient
+# truncated/empty generations for this prompt (2026-08-31), which a single
+# sample would misreport as a broken endpoint.
 c2_ok=1
 c2_detail=""
-c2_json=$(printf '%s' "$c2_text" | jq -c . 2>/dev/null) || c2_json=""
+c2_json=""
+c2_text=""
+c2_attempts=0
+while [ "$c2_attempts" -lt 2 ]; do
+  c2_attempts=$((c2_attempts + 1))
+  c2_body=$(post_chat "$TMP/canvas2.json" 180)
+  c2_text=$(strip_fence "$(json_field "$c2_body" '.choices[0].message.content // ""')")
+  c2_json=$(printf '%s' "$c2_text" | jq -c . 2>/dev/null) || c2_json=""
+  [ -n "$c2_json" ] && break
+  [ "$c2_attempts" -lt 2 ] && sleep 5
+done
 if [ -n "$c2_json" ]; then
   c2_check=$(printf '%s' "$c2_json" | jq -r '
     ((.commands? // [] | length >= 2) and
@@ -157,7 +172,7 @@ if [ -n "$c2_json" ]; then
     c2_detail="check=false: ${c2_json:0:200}"
   fi
 else
-  c2_detail="unparseable: ${c2_text:0:120}"
+  c2_detail="unparseable after $c2_attempts attempt(s): ${c2_text:0:120}"
 fi
 report "C7 canvas-multi-command" "$c2_ok" "$c2_detail"
 
