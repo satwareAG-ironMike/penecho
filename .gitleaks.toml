@@ -1,16 +1,16 @@
 title = "PenEcho fork scanner allowlist"
 
-# Every entry is an intentional, verified-safe fixture. Keep regex-bound and
-# minimal; a file-wide path allowlist is not acceptable here.
+# Single global allowlist (this gitleaks/betterleaks schema takes a map, not
+# an array of tables). Entries are content-bound (regexes match the extracted
+# secret value) and limited to intentional, verified-safe fixtures:
+#   - "wrong-key": C2 401 negative-test key in scripts/smoke-local-ai.sh
+#     (spec 002 TC-003); the endpoint rejects any value, so it can never be
+#     a real credential.
+#   - "PEN-ABCD-2345": unambiguously fake upstream pairing fixture, replaced
+#     in-tree by PEN-XXXX-0000 (spec 001 FR-005); only matches stale upstream
+#     history commits, which are immutable (fork is pull-only).
+# Keep this list minimal; a file-wide path allowlist is not acceptable here.
 
 [allowlist]
-description = "Intentional negative-test fixtures (verified safe, 2026-08-31)"
-
-[[allowlist.rules]]
-description = "Intentionally invalid key for the C2 401 negative test in the spec-002 smoke harness (TC-003); any value would be rejected by the endpoint"
-regex = 'Authorization: Bearer wrong-key'
-paths = ['scripts/smoke-local-ai\.sh$']
-
-[[allowlist.rules]]
-description = "Unambiguously fake pairing fixture from upstream test history; replaced in-tree by PEN-XXXX-0000 (spec 001 FR-005); upstream history is immutable"
-regex = 'PEN-ABCD-2345'
+description = "Intentional negative-test fixtures (verified safe 2026-08-31); see file header comments"
+regexes = ['wrong-key', 'PEN-ABCD-2345']
