@@ -194,6 +194,15 @@ Notes:
 | Thinking mode | ON by default - responses carry a separate `reasoning_content` field; `max_tokens` budgets MUST account for reasoning, empty `content` at tiny budgets is expected, not an error |
 | Canvas JSON command | PASS - valid `write_text` schema, but wrapped in a markdown ```json fence despite an explicit "no markdown" instruction; client-side fence tolerance MUST be verified and covered by a contract test (TC-002) |
 
+**Live verification findings (2026-08-31, Qwen3.6-35B-A3B-MTP-GGUF):**
+
+| Check | Result |
+|-------|--------|
+| 8-check smoke matrix (`scripts/smoke-local-ai.sh`) | 8/8 PASS (catalog, bad-key 401, unknown-model error, chat, SSE streaming, canvas `write_text`, canvas multi-command, reasoning budget); full log in issue #8 |
+| Base URL contract | Configured base URL MUST include the version path: a bare host resolves to `{host}/chat/completions` and 404s; `https://api.satware.ai/v1` works. Wizard gap tracked as issue #12 |
+| Generation variance | The multi-command canvas prompt produced 2 transient malformed generations in 5 attempts (one truncated mid-JSON, one empty `content` with reasoning only); one retry resolved both - the harness now retries once on unparseable JSON only |
+| Human E2E | A user ran a full canvas-agent session (configure, prompt, canvas output) against the endpoint; verified working 2026-08-31 |
+
 ## Assumptions & Handoffs
 
 - **Assumption 1**: The OpenAI Chat Completions surface (messages, tools,
@@ -231,7 +240,12 @@ Notes:
 - **SC-003**: Live matrix (TC-003): the flagship model
   (`Qwen3.6-35B-A3B-MTP-GGUF`, sole provisioned chat model - matrix narrowed
   2026-08-30 due to instance memory capacity) passes the full smoke test
-  (conversation + streaming + canvas JSON command round trip + degraded
-  paths) against `api.satware.ai`.
+   (conversation + streaming + canvas JSON command round trip + degraded
+   paths) against `api.satware.ai`.
 - **SC-004**: Data-flow document (FR-008) reviewed and published; in-app
-  reference present.
+   reference present.
+
+Status (2026-08-31): SC-003 met - smoke matrix 8/8 PASS plus human E2E
+verification (findings above; issue #8). SC-001 (egress audit, TC-004),
+SC-002 contract-test delta, and SC-004 remain open in the plan/implementation
+phase.

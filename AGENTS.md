@@ -67,6 +67,9 @@ After each sync: re-run the verification against the new upstream HEAD
   trademarks separate (`TRADEMARKS.md`).
 - EU/GDPR: device-linked mode routes canvas content through the `penecho.ai`
   relay; for EU data use local/self-hosted mode.
+- Local mode device config: `~/.penecho/config.env` (mode 0600). The API base
+  URL MUST include the version path (e.g. `https://api.satware.ai/v1`); a
+  bare host 404s on first agent use (issue #12).
 
 ## DOX framework
 
