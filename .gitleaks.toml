@@ -1,0 +1,16 @@
+title = "PenEcho fork scanner allowlist"
+
+# Every entry is an intentional, verified-safe fixture. Keep regex-bound and
+# minimal; a file-wide path allowlist is not acceptable here.
+
+[allowlist]
+description = "Intentional negative-test fixtures (verified safe, 2026-08-31)"
+
+[[allowlist.rules]]
+description = "Intentionally invalid key for the C2 401 negative test in the spec-002 smoke harness (TC-003); any value would be rejected by the endpoint"
+regex = 'Authorization: Bearer wrong-key'
+paths = ['scripts/smoke-local-ai\.sh$']
+
+[[allowlist.rules]]
+description = "Unambiguously fake pairing fixture from upstream test history; replaced in-tree by PEN-XXXX-0000 (spec 001 FR-005); upstream history is immutable"
+regex = 'PEN-ABCD-2345'
