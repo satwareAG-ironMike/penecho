@@ -45,6 +45,7 @@ After each sync: re-run the verification against the new upstream HEAD
 | Static checks + tests | `npm run check` |
 | Dev server | `npm run dev` |
 | CLI | `npm start` |
+| Live smoke (spec 002) | `./scripts/smoke-local-ai.sh` (key: `KEY` env or `~/.penecho/config.env`; 8 checks, exit = failure count) |
 
 ## Layout
 
@@ -55,6 +56,7 @@ After each sync: re-run the verification against the new upstream HEAD
 | `src/providers/` | AI providers: Claude/Codex/Kimi CLI + `api` (OpenAI/Anthropic-compatible HTTP) |
 | `public/` | canvas client |
 | `desktop/`, `tools/` | Electron + mobile packaging |
+| `scripts/` | verification tooling: `smoke-local-ai.sh` (spec 002 endpoint matrix) |
 | `test/` | `node:test` suite |
 | `specs/` | SDD specs (active feature: `002-local-ai-gdpr-compat`, milestone `local-ai-gdpr-compat`); IPADP metadata in `specs/metadata.json` |
 | `docs/adr/` | decision records |
